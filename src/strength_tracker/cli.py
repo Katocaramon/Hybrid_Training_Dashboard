@@ -11,6 +11,7 @@ oppure `make session FIT=~/Downloads/palestra`.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -24,7 +25,6 @@ from . import (
 # Fase in cui ciascun comando viene implementato: finche' non e' pronto il
 # comando esce con codice 1 e lo dice, invece di fingere di aver lavorato.
 _PHASE = {
-    "inspect": "2 (parser FIT)",
     "ingest": "3 (schema SQLite e ingestione)",
     "unmapped": "4 (mappatura esercizi)",
     "correct": "3 (schema SQLite e ingestione)",
@@ -40,6 +40,32 @@ def _todo(command: str) -> int:
         file=sys.stderr,
     )
     return 1
+
+
+def cmd_inspect(args: argparse.Namespace) -> int:
+    """Dump JSON della struttura reale di un file .fit."""
+    from .fit_parser import inspect_file
+
+    if not args.path.is_file():
+        print(f"[strength-tracker] file non trovato: {args.path}", file=sys.stderr)
+        return 2
+    data = inspect_file(
+        args.path,
+        raw_messages=args.raw,
+        raw_limit=args.raw_limit,
+        include_hr=args.include_hr,
+    )
+    text = json.dumps(data, indent=2, ensure_ascii=False)
+    if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(text, encoding="utf-8")
+        print(f"[strength-tracker] ispezione scritta in {args.out}", file=sys.stderr)
+    else:
+        print(text)
+    if "skipped" in data:
+        print(f"[strength-tracker] file saltato: {data['skipped']}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -79,7 +105,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_inspect.add_argument(
         "--out", type=Path, default=None, metavar="PATH", help="scrive il JSON su file invece che su stdout"
     )
-    p_inspect.set_defaults(func=lambda args: _todo("inspect"))
+    p_inspect.add_argument(
+        "--raw",
+        action="store_true",
+        help="include un campione grezzo di ogni tipo di messaggio, campi unknown_* compresi",
+    )
+    p_inspect.add_argument(
+        "--raw-limit", type=int, default=3, metavar="N", help="messaggi grezzi per tipo (default 3)"
+    )
+    p_inspect.add_argument(
+        "--include-hr", action="store_true", help="include tutti i campioni di frequenza cardiaca"
+    )
+    p_inspect.set_defaults(func=cmd_inspect)
 
     p_unmapped = sub.add_parser(
         "unmapped", help="elenca i nomi esercizio grezzi presenti nel DB e non ancora mappati"

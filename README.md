@@ -20,13 +20,71 @@ Il progetto procede per fasi, con una verifica alla fine di ognuna.
 | Fase | Contenuto | Stato |
 | --- | --- | --- |
 | 1 | Scheletro del repo, `pyproject`, CLI funzionante | ✅ fatto |
-| 2 | Parser FIT + test + dump JSON di ispezione | ⏳ in attesa di un file `.fit` reale |
+| 2 | Parser FIT + test + dump JSON di ispezione | ✅ fatto |
 | 3 | Schema SQLite e ingestione idempotente | ⬜ |
 | 4 | Mappatura esercizi e metriche | ⬜ |
 | 5 | Dashboard HTML | ⬜ |
 
 I comandi non ancora implementati escono con codice `1` e lo dicono: non
 fingono di aver lavorato.
+
+## Cosa contiene davvero un file FIT di forza
+
+Verificato su un file reale (Epix Pro Gen 2, export Garmin Connect
+`<activity_id>_ACTIVITY.fit`), non assunto dalla specifica. `strength-tracker
+inspect <file.fit> --raw` rifa' questa ispezione su qualsiasi file, campi
+`unknown_*` compresi: e' il primo comando da lanciare se un firmware nuovo
+cambia le carte in tavola.
+
+- **`set` (msg 225)** — una riga per serie *e* per pausa (`set_type` =
+  `active` / `rest`). Campi utili: `message_index`, `start_time`, `duration`,
+  `repetitions`, `weight` (kg, scala 16), `weight_display_unit`, `category`,
+  `category_subtype`, `wkt_step_index`.
+- `set.timestamp` **non** e' l'orario della serie: e' costante e pari
+  all'inizio della sessione. L'orario vero e' `start_time`.
+- `category` e `category_subtype` sono **array** (3 slot, spesso ripetuti o
+  nulli): un set puo' dichiarare piu' categorie. Si legge a coppie e si usa la
+  prima valida, conservando comunque l'array completo.
+- Gli esercizi sono **indici numerici** di un catalogo chiuso
+  (`category=21, subtype=42`). Il profilo FIT incluso in `fitdecode` contiene
+  gli enum completi (53 categorie, 51 cataloghi di nomi), quindi la coppia
+  diventa uno slug stabile: `pull_up/band_assisted_pull_up`. Se categoria o
+  indice non sono nel profilo si tiene il numero grezzo (`pull_up/42`,
+  `250/7`): niente crash, niente nomi inventati, e la serie finisce fra i non
+  mappati.
+- **`exercise_title` (msg 264)** — l'orologio scrive nel file stesso una
+  tabella `(categoria, nome) -> etichetta` ("Band-assisted Pull-up"): la
+  usiamo come etichetta leggibile quando c'e'.
+- **`workout_step` (msg 27)** — se la seduta segue un allenamento
+  strutturato, `set.wkt_step_index` punta qui e da' ripetizioni
+  (`duration_reps`) e peso (`exercise_weight`, scala **100**, non 16)
+  **pianificati**. Sono valori pianificati, non eseguiti: restano in colonne
+  separate e non entrano mai nel volume.
+- **`record` (msg 20)** — frequenza cardiaca a 1 Hz per tutta la seduta
+  (~4300 campioni per 70 minuti).
+- **`session` (msg 18)** — `total_timer_time` e' il tempo attivo (non esiste
+  un campo dedicato), piu' FC media/max, calorie, `sport_profile_name`.
+- **Non esiste un campo `activity_id`** dentro il FIT: l'id di Garmin Connect
+  sta solo nel nome del file esportato.
+- L'offset dal fuso locale si ricava da `activity.local_timestamp -
+  activity.timestamp`. Serve per datare correttamente le sedute serali.
+
+### Identita' di una seduta
+
+`session_uid` in ordine di preferenza:
+
+1. `garmin:<activity_id>` dal nome del file esportato;
+2. `device:<serial>:<time_created>` — stabile anche se riesporti lo stesso
+   allenamento e i byte cambiano;
+3. `sha256:<hash del contenuto>`.
+
+E' la chiave su cui poggia l'idempotenza dell'ingestione (Fase 3).
+
+### Tolleranza agli errori
+
+File troncati, file non-FIT e attivita' senza messaggi `set` (una corsa, per
+dire) vengono **saltati con un motivo esplicito**, senza far cadere il resto
+del batch. `parse_paths()` restituisce `(path, attivita', motivo_dello_skip)`.
 
 ## Installazione
 
@@ -82,7 +140,16 @@ sovrascrivibili:
 ├── src/strength_tracker/          # fit_parser, db, ingest, mapping, metrics, dashboard, cli
 ├── templates/dashboard.html.j2
 ├── vendor/chart.min.js            # Chart.js 4.4.4 UMD, MIT — inlineato nella dashboard
-└── tests/                         # fixtures/ contiene FIT sintetici o anonimizzati
+└── tests/
+    ├── fitgen.py                  # encoder FIT minimale: genera le fixture binarie
+    └── fixtures/*.fit             # FIT sintetici versionati (nessun dato personale)
+```
+
+I test girano su file `.fit` binari veri prodotti da `tests/fitgen.py` e letti
+dallo stesso `fitdecode` usato in produzione: nessun mock. Per rigenerarli:
+
+```bash
+uv run python tests/fitgen.py
 ```
 
 ## Scelte tecniche
