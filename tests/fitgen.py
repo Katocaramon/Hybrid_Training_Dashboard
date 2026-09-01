@@ -116,6 +116,7 @@ def _encode(base_type: str, value: object) -> bytes:
 
 # --- numeri di messaggio del profilo FIT usati qui -------------------------
 MSG_FILE_ID = 0
+MSG_USER_PROFILE = 3
 MSG_SPORT = 12
 MSG_SESSION = 18
 MSG_RECORD = 20
@@ -187,12 +188,26 @@ def _step_index(category: int, subcategory: int) -> int | None:
     return None
 
 
+#: (categoria, sottocategoria, reps, peso kg, durata attiva, riposo)
+PIANO_DEFAULT = [
+    ((8, 8, 8), (0, 0, 0), 8, 60.0, 42.0, 120.0),
+    ((8, 8, 8), (0, 0, 0), 8, 65.0, 44.5, 120.0),
+    ((8, 8, 8), (0, 0, 0), 6, 70.0, 38.0, 150.0),
+    ((8, 8, 8), (4, 4, 4), 10, 24.0, 55.0, 90.0),
+    ((21, 21, 21), (42, 42, 42), 6, None, 33.0, 90.0),
+    ((19, 19, 19), (66, 66, 66), 12, 0.0, 45.0, 60.0),  # peso zero: anomalia da segnalare
+    ((250, 250, 250), (7, 7, 7), 15, 12.5, 40.0, 60.0),  # fuori catalogo -> unmapped
+]
+
+
 def build_strength_fit(
     path: Path,
     *,
     start: datetime | None = None,
     serial: int = 3450810483,
     utc_offset_s: int = 7200,
+    plan: list | None = None,
+    body_weight_kg: float | None = 71.1,
 ) -> Path:
     """Seduta di forza sintetica ma realistica.
 
@@ -204,6 +219,11 @@ def build_strength_fit(
     w = FitWriter()
     _file_id(w, start, serial)
     _sport(w, 10, 20, "Pesi")  # training / strength_training
+    if body_weight_kg is not None:
+        w.message(
+            MSG_USER_PROFILE,
+            [(1, "enum", 0), (3, "uint8", 168), (4, "uint16", round(body_weight_kg * 10))],
+        )
 
     # tabella (categoria, nome) -> etichetta, come la scrive l'orologio
     for idx, (cat, name, label) in enumerate(
@@ -251,16 +271,7 @@ def build_strength_fit(
         ],
     )
 
-    plan = [
-        # (categoria, sottocategoria, reps, peso kg, durata attiva, riposo)
-        ((8, 8, 8), (0, 0, 0), 8, 60.0, 42.0, 120.0),
-        ((8, 8, 8), (0, 0, 0), 8, 65.0, 44.5, 120.0),
-        ((8, 8, 8), (0, 0, 0), 6, 70.0, 38.0, 150.0),
-        ((8, 8, 8), (4, 4, 4), 10, 24.0, 55.0, 90.0),
-        ((21, 21, 21), (42, 42, 42), 6, None, 33.0, 90.0),
-        ((19, 19, 19), (66, 66, 66), 12, 0.0, 45.0, 60.0),  # peso zero: anomalia da segnalare
-        ((250, 250, 250), (7, 7, 7), 15, 12.5, 40.0, 60.0),  # fuori catalogo -> unmapped
-    ]
+    plan = PIANO_DEFAULT if plan is None else plan
 
     t = start
     index = 0

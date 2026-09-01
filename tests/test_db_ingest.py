@@ -465,9 +465,15 @@ def test_database_v1_migra_senza_perdere_dati(tmp_path, cartella):
     sid = conn.execute("SELECT id FROM sets WHERE set_index = 0").fetchone()["id"]
     db.add_correction(conn, sid, reps=10)
     # si simula un database fermo alla versione 1
-    conn.execute("DELETE FROM schema_migrations WHERE version = 2")
-    conn.execute("DROP VIEW v_sets")  # la vista v1 non conosceva la colonna
-    conn.execute("ALTER TABLE sets DROP COLUMN wkt_step_note")
+    conn.execute("DELETE FROM schema_migrations WHERE version > 1")
+    conn.execute("DROP VIEW v_sets")  # le viste v1 non conoscevano le colonne nuove
+    conn.execute("DROP VIEW v_set_hr")
+    conn.execute("DROP INDEX idx_sets_epoch")
+    conn.execute("DROP INDEX idx_hr_epoch")
+    for colonna in ("wkt_step_note", "start_epoch", "end_epoch"):
+        conn.execute(f"ALTER TABLE sets DROP COLUMN {colonna}")
+    conn.execute("ALTER TABLE hr_samples DROP COLUMN epoch")
+    conn.execute("ALTER TABLE sessions DROP COLUMN body_weight_kg")
     conn.execute("DROP TABLE exercise_map")
     conn.execute(
         "CREATE TABLE exercise_map (raw_key TEXT PRIMARY KEY, exercise_name TEXT NOT NULL,"
@@ -477,6 +483,10 @@ def test_database_v1_migra_senza_perdere_dati(tmp_path, cartella):
     conn.close()
 
     conn = db.connect(percorso)  # la riapertura deve migrare
-    assert "wkt_step_note" in {r[1] for r in conn.execute("PRAGMA table_info(sets)")}
+    colonne = {r[1] for r in conn.execute("PRAGMA table_info(sets)")}
+    assert {"wkt_step_note", "start_epoch", "end_epoch"} <= colonne
     assert conn.execute("SELECT COUNT(*) c FROM sets").fetchone()["c"] == 14
+    # gli epoch vengono ricalcolati dai timestamp gia' salvati
+    assert conn.execute("SELECT COUNT(start_epoch) c FROM sets").fetchone()["c"] == 14
+    assert conn.execute("SELECT COUNT(epoch) c FROM hr_samples").fetchone()["c"] == 988
     assert conn.execute("SELECT reps FROM v_sets WHERE set_id = ?", (sid,)).fetchone()["reps"] == 10

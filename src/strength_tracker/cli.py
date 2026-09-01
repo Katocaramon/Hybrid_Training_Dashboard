@@ -26,7 +26,6 @@ from . import (
 # comando esce con codice 1 e lo dice, invece di fingere di aver lavorato.
 _PHASE = {
     "report": "5 (dashboard)",
-    "stats": "4 (metriche)",
 }
 
 
@@ -117,6 +116,14 @@ def cmd_correct(args: argparse.Namespace) -> int:
     from . import db
 
     conn = _open_db(args)
+    if args.from_csv:
+        return _correct_from_csv(conn, args.from_csv)
+    if args.set_id is None:
+        print(
+            "[strength-tracker] serve un set_id, oppure --from-csv FILE",
+            file=sys.stderr,
+        )
+        return 2
     try:
         corr_id = db.add_correction(
             conn,
@@ -142,6 +149,170 @@ def cmd_correct(args: argparse.Namespace) -> int:
         f"(nel file: reps={riga['reps_raw']} peso={riga['weight_kg_raw']})"
     )
     return 0
+
+
+def _correct_from_csv(conn, percorso: Path) -> int:
+    """Importa correzioni in blocco, numerando le serie come Garmin Connect."""
+    import csv
+
+    from . import db
+
+    if not percorso.is_file():
+        print(f"[strength-tracker] file non trovato: {percorso}", file=sys.stderr)
+        return 2
+    fatte, errori = 0, []
+    with open(percorso, newline="", encoding="utf-8") as fh:
+        # Le righe di commento vanno tolte prima di DictReader, altrimenti la
+        # prima diventa l'intestazione e l'import scivola via in silenzio.
+        righe_utili = [r for r in fh if r.strip() and not r.lstrip().startswith("#")]
+    lettore = csv.DictReader(righe_utili)
+    if not lettore.fieldnames or "data" not in lettore.fieldnames:
+        print(
+            f"[strength-tracker] {percorso}: manca la colonna 'data' "
+            f"(intestazione trovata: {lettore.fieldnames})",
+            file=sys.stderr,
+        )
+        return 2
+    if True:
+        for n, riga in enumerate(lettore, start=2):
+            if not (riga.get("data") or "").strip():
+                errori.append(f"riga {n}: colonna 'data' vuota")
+                continue
+            try:
+                set_id = db.set_id_by_position(
+                    conn,
+                    _data_iso(riga["data"]),
+                    int(riga["serie"]),
+                    (riga.get("seduta") or "").strip() or None,
+                )
+                db.add_correction(
+                    conn,
+                    set_id,
+                    reps=_int_o_none(riga.get("reps")),
+                    weight_kg=_float_o_none(riga.get("peso_kg")),
+                    note=(riga.get("nota") or "").strip() or f"import da {percorso.name}",
+                )
+                fatte += 1
+            except (KeyError, ValueError) as exc:
+                errori.append(f"riga {n}: {exc}")
+    print(f"Correzioni applicate: {fatte}")
+    for errore in errori:
+        print(f"  ! {errore}", file=sys.stderr)
+    return 1 if errori and not fatte else 0
+
+
+def _int_o_none(v: str | None) -> int | None:
+    v = (v or "").strip()
+    return int(v) if v else None
+
+
+def _float_o_none(v: str | None) -> float | None:
+    v = (v or "").strip().replace(",", ".")
+    return float(v) if v else None
+
+
+def _data_iso(v: str) -> str:
+    """DD/MM/YYYY (o gia' ISO) -> YYYY-MM-DD."""
+    v = v.strip()
+    if "/" in v:
+        g, m, a = v.split("/")
+        return f"{a}-{m.zfill(2)}-{g.zfill(2)}"
+    return v
+
+
+def _durata(secondi: float | None) -> str:
+    if not secondi:
+        return "-"
+    minuti, s = divmod(int(secondi), 60)
+    ore, minuti = divmod(minuti, 60)
+    return f"{ore}h{minuti:02d}" if ore else f"{minuti}'{s:02d}\""
+
+
+def _kg(v: float | None, suffisso: str = " kg") -> str:
+    return "n/d" if v is None else f"{v:,.0f}{suffisso}".replace(",", ".")
+
+
+def cmd_stats(args: argparse.Namespace) -> int:
+    """Riepilogo testuale rapido nel terminale."""
+    from . import metrics as mt
+
+    conn = _open_db(args)
+    _load_mapping_into(conn, args)
+    r = mt.riepilogo(conn)
+    if not r["n_sedute"]:
+        print("Database vuoto: lancia prima `strength-tracker ingest <path>`.")
+        return 1
+
+    print("RIEPILOGO")
+    print(f"  Sedute                {r['n_sedute']}")
+    print(
+        f"  Periodo               {_data_it(r['prima_seduta'])} - {_data_it(r['ultima_seduta'])}"
+    )
+    print(f"  Ultime 4 settimane    {r['sedute_ultime_4_settimane']} sedute")
+    print(f"  Serie attive          {r['n_serie_attive']}")
+    print(f"  Tempo attivo          {_durata(r['tempo_attivo_totale_s'])}")
+    print(f"  Tempo sotto tensione  {_durata(r['tempo_sotto_tensione_s'])}")
+    if r["volume_totale_kg"] is None:
+        print("  Volume totale         non calcolabile: nessuna serie ha reps e peso")
+    else:
+        print(
+            f"  Volume totale         {_kg(r['volume_totale_kg'])}"
+            f"  (su {r['serie_con_volume']}/{r['serie_a_carico']} serie a carico)"
+        )
+
+    print("\nVOLUME SETTIMANALE")
+    for w in mt.volume_settimanale(conn):
+        volume = (
+            "non calcolabile" if w["volume_kg"] is None else _kg(w["volume_kg"])
+        )
+        media = "" if w["media_mobile_kg"] is None else f"  media 4 sett. {_kg(w['media_mobile_kg'])}"
+        print(f"  {w['etichetta']}  {w['n_sedute']} sedute  {volume}{media}")
+
+    print("\nSERIE PER GRUPPO MUSCOLARE (a settimana)")
+    dati = mt.serie_per_gruppo(conn, focus=_focus(args))
+    for gruppo in dati["gruppi"]:
+        serie = "  ".join(f"{n:>3}" for n in dati["serie"][gruppo])
+        marchio = " *" if gruppo in dati["focus"] else "  "
+        print(f" {marchio}{gruppo:20s} {serie}")
+    if dati["focus"]:
+        print("  * gruppi sotto osservazione (interferenza con la corsa)")
+
+    print("\nULTIME SEDUTE")
+    for s in mt.sedute(conn)[:8]:
+        densita = "n/d" if s["densita_kg_min"] is None else f"{s['densita_kg_min']} kg/min"
+        deriva = "n/d" if s["fc_deriva_bpm"] is None else f"{s['fc_deriva_bpm']:+g} bpm"
+        nome = (s["workout_name"] or "-")[:22]
+        print(
+            f"  {_data_it(s['local_date'])}  {nome:22s} {s['n_serie']:>3} serie  "
+            f"vol {_kg(s['volume_kg'])}  dens {densita}  "
+            f"L/R {s['rapporto_lavoro_riposo'] or 'n/d'}  deriva FC {deriva}"
+        )
+
+    a = mt.anomalie(conn)
+    totale = sum(len(v) for v in a.values())
+    print(f"\nANOMALIE ({totale})")
+    etichette = {
+        "esercizi_non_mappati": "esercizi non mappati",
+        "serie_peso_zero": "serie con peso zero",
+        "serie_reps_sospette": "serie con ripetizioni sospette",
+        "serie_durata_anomala": "serie di durata anomala (>5')",
+        "sedute_senza_ripetizioni": "sedute senza alcuna ripetizione registrata",
+    }
+    for chiave, voci in a.items():
+        if voci:
+            print(f"  {len(voci):>3}  {etichette[chiave]}")
+    if not totale:
+        print("  nessuna")
+    return 0
+
+
+def _focus(args: argparse.Namespace) -> list[str]:
+    from .mapping import load_mapping
+
+    try:
+        return list(load_mapping(getattr(args, "mapping", None) or default_mapping_path()).focus_groups)
+    except Exception:
+        return []
 
 
 def _data_it(iso: str | None) -> str:
@@ -256,7 +427,20 @@ def build_parser() -> argparse.ArgumentParser:
         "correct",
         help="registra una correzione manuale su una serie (i dati grezzi non vengono toccati)",
     )
-    p_correct.add_argument("set_id", type=int, help="id della serie da correggere")
+    p_correct.add_argument(
+        "set_id", type=int, nargs="?", help="id della serie da correggere"
+    )
+    p_correct.add_argument(
+        "--from-csv",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=(
+            "importa piu' correzioni da un CSV con colonne "
+            "data,serie,reps,peso_kg[,seduta,nota]; 'serie' e' il numero "
+            "della serie attiva come lo mostra Garmin Connect"
+        ),
+    )
     p_correct.add_argument("--reps", type=int, default=None, help="ripetizioni corrette")
     p_correct.add_argument("--weight", type=float, default=None, metavar="KG", help="peso corretto in kg")
     p_correct.add_argument(
@@ -286,7 +470,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_report.set_defaults(func=lambda args: _todo("report"))
 
     p_stats = sub.add_parser("stats", help="riepilogo testuale rapido nel terminale")
-    p_stats.set_defaults(func=lambda args: _todo("stats"))
+    p_stats.add_argument(
+        "--mapping",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=f"mappatura esercizi (default: {default_mapping_path()})",
+    )
+    p_stats.set_defaults(func=cmd_stats)
 
     return parser
 
@@ -297,7 +488,15 @@ def main(argv: list[str] | None = None) -> int:
     if getattr(args, "func", None) is None:
         parser.print_help()
         return 0
-    return int(args.func(args))
+    try:
+        return int(args.func(args))
+    except BrokenPipeError:
+        # `strength-tracker stats | head` non e' un errore.
+        try:
+            sys.stdout.close()
+        except BrokenPipeError:
+            pass
+        return 0
 
 
 if __name__ == "__main__":  # pragma: no cover

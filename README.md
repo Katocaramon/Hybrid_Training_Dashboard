@@ -22,7 +22,7 @@ Il progetto procede per fasi, con una verifica alla fine di ognuna.
 | 1 | Scheletro del repo, `pyproject`, CLI funzionante | ✅ fatto |
 | 2 | Parser FIT + test + dump JSON di ispezione | ✅ fatto |
 | 3 | Schema SQLite, ingestione idempotente, mappatura, correzioni | ✅ fatto |
-| 4 | Metriche (volume, e1RM, densità, deriva FC) | ⬜ |
+| 4 | Metriche (volume, e1RM, densità, deriva FC) | ✅ fatto |
 | 5 | Dashboard HTML | ⬜ |
 
 I comandi non ancora implementati escono con codice `1` e lo dicono: non
@@ -197,6 +197,66 @@ mappatura può quindi qualificare una chiave:
 `v_sets` fa due join sulla mappatura e la voce qualificata dalla nota ha la
 precedenza. Il confronto è case-insensitive e ignora gli spazi ai bordi.
 
+## Le metriche
+
+Tutte partono da `v_sets`, quindi correzioni e mappatura sono già applicate.
+Ogni assunzione è qui, non nascosta nel codice.
+
+| Metrica | Formula | Assunzioni e limiti |
+| --- | --- | --- |
+| **Tonnellaggio** | Σ (peso × reps) | Solo serie con `weight_mode = carico`. Se manca reps o peso la serie non contribuisce ed è contata a parte: `NULL`, mai zero |
+| **e1RM** | Epley: peso × (1 + reps / 30) | Stima lineare tarata sulle serie corte. Sopra le **12 reps** è marcata inaffidabile. A 1 rep la formula darebbe 1,033× il peso, quindi quel caso restituisce il peso |
+| **Densità** | tonnellaggio / tempo attivo | Tempo attivo = `session.total_timer_time`, l'unico che l'orologio dà |
+| **Lavoro/riposo** | Σ durata serie attive / Σ durata pause | Dai messaggi `set`. Le pause non registrate non vengono stimate |
+| **Deriva FC** | FC media ultimo terzo − primo terzo delle serie | Proxy grezzo di fatica: sale anche solo perché la seduta scalda. Servono ≥3 serie con FC, altrimenti `NULL` |
+| **Serie per gruppo** | conteggio serie attive per settimana ISO | Più robusta del tonnellaggio quando gli esercizi cambiano o il carico non è misurabile |
+| **Media mobile** | media 4 settimane sul volume | Calcolata **solo sulle settimane con dati**: una settimana senza allenamento non vale zero, altrimenti la media crollerebbe per finta |
+
+La FC per serie si ottiene incrociando i campioni a 1 Hz con la finestra
+temporale di ogni serie. Il confronto è su epoch e non su stringhe ISO: con i
+fusi orari il confronto testuale è inaffidabile.
+
+### Non tutti i pesi sono carichi
+
+`weight_mode` nella mappatura dice come leggere il peso registrato:
+
+| Modo | Significato | Tonnellaggio | Carico effettivo |
+| --- | --- | --- | --- |
+| `carico` (default) | il peso è il carico esterno | peso × reps | il peso |
+| `assistenza` | il peso è l'**aiuto** ricevuto | `NULL` | peso corporeo − assistenza |
+| `corpo_libero` | nessun carico esterno | `NULL` | peso corporeo |
+
+Alle trazioni assistite 40 kg indicano quanto la macchina ti *aiuta*:
+moltiplicarli per le ripetizioni darebbe un tonnellaggio non solo sbagliato ma
+rovesciato di segno, perché più assistenza significa serie più facile. Qui il
+progresso è l'assistenza che **cala**, ed è quello che la progressione mostra
+(`assistenza_minima_kg`, ed e1RM calcolato sul carico effettivo).
+
+Il peso corporeo viene letto dal messaggio `user_profile` del file stesso. Dove
+serve per una stima, la riga porta `carico_stimato = 1` e il tonnellaggio
+finisce in `volume_stimato_kg`, tenuto **fuori** dal totale: il numero di testa
+resta il carico esterno vero.
+
+### Inserire a mano i carichi mancanti
+
+Quando i valori sono stati messi su Garmin Connect dopo la seduta, nel `.fit`
+non ci sono. Si trascrivono in un CSV numerando le serie **come le mostra
+Connect** (solo le attive, da 1):
+
+```csv
+data,seduta,serie,reps,peso_kg,nota
+01/09/2026,Day 1,7,10,24,Pressa su panca con manubrio
+```
+
+```bash
+strength-tracker correct --from-csv examples/correzioni_day1_20260901.csv
+```
+
+La colonna `seduta` serve solo quando in quel giorno c'è più di un
+allenamento. In `examples/` c'è la seduta "Day 1 Upper Body" del 01/09/2026
+già trascritta. Finiscono tutte in `corrections`: i dati grezzi restano
+intatti e `data_source` dice da dove viene ogni valore.
+
 ## Installazione
 
 Con [uv](https://docs.astral.sh/uv/) (consigliato):
@@ -223,6 +283,7 @@ strength-tracker inspect <file.fit>     # dump JSON dei messaggi grezzi (--raw p
 strength-tracker unmapped               # esercizi non ancora mappati
 strength-tracker unmapped --yaml        # le voci già pronte da incollare nel YAML
 strength-tracker correct <set_id> --reps N --weight K [--exercise RAW_KEY] [--note "..."]
+strength-tracker correct --from-csv <file.csv>   # correzioni in blocco
 strength-tracker report                 # genera output/dashboard.html
 strength-tracker stats                  # riepilogo testuale nel terminale
 ```

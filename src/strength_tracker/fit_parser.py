@@ -143,6 +143,7 @@ class SessionRecord:
     workout_name: str | None
     total_training_effect: float | None
     utc_offset_s: int | None
+    body_weight_kg: float | None = None
 
     @property
     def start_time_local(self) -> datetime | None:
@@ -307,6 +308,7 @@ def parse_file(path: Path) -> ParsedActivity:
     sport_fields: dict[str, tuple[Any, Any]] | None = None
     workout_fields: dict[str, tuple[Any, Any]] | None = None
     activity_fields: dict[str, tuple[Any, Any]] | None = None
+    profile_fields: dict[str, tuple[Any, Any]] | None = None
 
     try:
         for frame in _read_frames(path):
@@ -350,6 +352,8 @@ def parse_file(path: Path) -> ParsedActivity:
                 workout_fields = _fields(frame)
             elif name == "activity" and activity_fields is None:
                 activity_fields = _fields(frame)
+            elif name == "user_profile" and profile_fields is None:
+                profile_fields = _fields(frame)
     except Exception as exc:  # fitdecode alza FitError, EOFError, struct.error...
         raise FitSkipped(f"file .fit illeggibile o corrotto ({exc.__class__.__name__}: {exc})") from exc
 
@@ -391,6 +395,9 @@ def parse_file(path: Path) -> ParsedActivity:
         workout_name=_val(workout_fields or {}, "wkt_name"),
         total_training_effect=_val(sf, "total_training_effect"),
         utc_offset_s=utc_offset_s,
+        # Peso corporeo dal profilo utente: serve per gli esercizi in cui il
+        # carico e' il corpo, o in cui il peso registrato e' l'assistenza.
+        body_weight_kg=_val(profile_fields or {}, "weight"),
     )
     if session_fields is None:
         warnings.append("nessun messaggio 'session': i dati di riepilogo della seduta restano nulli")
@@ -567,6 +574,7 @@ def inspect_file(
         "sport_profile_name": act.session.sport_profile_name,
         "workout_name": act.session.workout_name,
         "total_training_effect": act.session.total_training_effect,
+        "body_weight_kg": act.session.body_weight_kg,
     }
     out["exercise_titles"] = [
         {"category_raw": t.category_raw, "name_raw": t.name_raw, "label": t.label}

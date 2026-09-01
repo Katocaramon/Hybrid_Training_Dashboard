@@ -6,7 +6,14 @@
 #   - name: nome che voglio leggere in dashboard
 #     primary: gruppo muscolare primario
 #     secondary: [gruppi secondari]
+#     weight_mode: carico | assistenza | corpo_libero
 #     match: [chiavi grezze, in OR]
+#
+# `weight_mode` dice come leggere il peso registrato dall'orologio:
+#   carico       il peso e' il carico esterno sollevato (default)
+#   assistenza   il peso e' l'AIUTO ricevuto: alle trazioni assistite piu' e'
+#                alto, piu' la serie e' facile. Non si moltiplica per le reps.
+#   corpo_libero nessun carico esterno (plank, dead bug)
 #
 # Le chiavi grezze sono quelle che stampa `strength-tracker unmapped`:
 # `categoria/nome` risolti dal catalogo FIT (`deadlift/trap_bar_deadlift`),
@@ -66,6 +73,7 @@ exercises:
   - name: Copenhagen plank
     primary: adduttori
     secondary: [core]
+    weight_mode: corpo_libero
     # Il Copenhagen plank non esiste nel catalogo Garmin. Nel programma
     # "Day 2 Legs" e' registrato come plank laterale, e a distinguerlo da un
     # plank laterale vero e' solo la nota dello step: "Copenhagen plank".
@@ -78,13 +86,18 @@ exercises:
       - hip_stability/sliding_hip_adduction
       - banded_exercises/leg_adduction
 
-  - name: Band-assisted pull-up
+  - name: Trazioni assistite
     primary: dorsali
     secondary: [bicipiti]
-    # confermato: e' la chiave trovata nella seduta del 01/09/2026
+    # Il peso registrato NON e' un carico: e' l'assistenza della macchina
+    # (o dell'elastico). 40 kg di aiuto vuol dire una serie piu' facile, non
+    # 40 kg sollevati. Il progresso qui e' l'assistenza che CALA.
+    weight_mode: assistenza
+    # confermato: chiave trovata nella seduta del 01/09/2026
     match:
       - pull_up/band_assisted_pull_up
       - pull_up/banded_pull_ups
+      - pull_up/band_assisted_chin_up
 
   - name: Military press
     primary: spalle
@@ -193,11 +206,13 @@ exercises:
   - name: Dead bug
     primary: core
     secondary: []
+    weight_mode: corpo_libero
     match: [hip_stability/dead_bug]
 
   - name: Side plank
     primary: core
     secondary: [adduttori]
+    weight_mode: corpo_libero
     # senza nota: plank laterale vero. Con nota "Copenhagen plank" vince
     # invece la voce qualificata piu' sopra.
     match: [plank/side_plank]

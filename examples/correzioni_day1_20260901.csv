@@ -1,0 +1,35 @@
+# Carichi della seduta "Day 1 Upper Body" del 01/09/2026, trascritti da Garmin
+# Connect: erano stati inseriti dall'app dopo la seduta, quindi non compaiono
+# nel .fit esportato ("Export Original" restituisce il file originale).
+#
+# 'serie' e' il numero della serie attiva come lo mostra Connect (le pause non
+# contano). 'seduta' serve solo perche' quel giorno ci sono due allenamenti.
+#
+#   strength-tracker correct --from-csv examples/correzioni_day1_20260901.csv
+#
+# Le serie 1-6 (elastici, cardio) e 30-35 (dead bug, plank) non avevano
+# carico: restano come sono, a corpo libero.
+data,seduta,serie,reps,peso_kg,nota
+01/09/2026,Day 1,7,10,24,Pressa su panca con manubrio
+01/09/2026,Day 1,8,10,39,Lat machine presa ampia
+01/09/2026,Day 1,9,10,28,Pressa su panca con manubrio
+01/09/2026,Day 1,10,10,39,Lat machine presa ampia
+01/09/2026,Day 1,11,10,28,Pressa su panca con manubrio
+01/09/2026,Day 1,12,10,39,Lat machine presa ampia
+01/09/2026,Day 1,13,10,28,Pressa su panca con manubrio
+01/09/2026,Day 1,14,10,39,Lat machine presa ampia
+01/09/2026,Day 1,15,5,40,Trazioni assistite: 40 kg di assistenza
+01/09/2026,Day 1,16,5,40,Trazioni assistite: 40 kg di assistenza
+01/09/2026,Day 1,17,5,40,Trazioni assistite: 40 kg di assistenza
+01/09/2026,Day 1,18,10,24,Rematore un braccio
+01/09/2026,Day 1,19,10,24,Rematore un braccio
+01/09/2026,Day 1,20,10,24,Rematore un braccio
+01/09/2026,Day 1,21,10,20,Shoulder press manubri seduto
+01/09/2026,Day 1,22,15,6,Face pull
+01/09/2026,Day 1,23,10,20,Shoulder press manubri seduto
+01/09/2026,Day 1,24,15,6,Face pull
+01/09/2026,Day 1,25,10,20,Shoulder press manubri seduto
+01/09/2026,Day 1,26,15,6,Face pull
+01/09/2026,Day 1,27,10,9,Core press con cavo
+01/09/2026,Day 1,28,10,9,Core press con cavo
+01/09/2026,Day 1,29,10,9,Core press con cavo

@@ -40,12 +40,21 @@ class Match:
         return (self.raw_key, self.note)
 
 
+#: Come va letto il peso registrato dall'orologio.
+WEIGHT_MODES = {
+    "carico",        # il peso e' il carico esterno sollevato (default)
+    "assistenza",    # il peso e' l'aiuto ricevuto: trazioni assistite, elastici
+    "corpo_libero",  # nessun carico esterno: plank, dead bug, affondi a corpo libero
+}
+
+
 @dataclass(frozen=True)
 class ExerciseMapping:
     name: str
     primary_group: str | None
     secondary_groups: tuple[str, ...]
     matches: tuple[Match, ...]
+    weight_mode: str = "carico"
 
     @property
     def raw_keys(self) -> tuple[str, ...]:
@@ -76,6 +85,7 @@ class Mapping:
                 "exercise_name": ex.name,
                 "primary_group": ex.primary_group,
                 "secondary_groups": list(ex.secondary_groups),
+                "weight_mode": ex.weight_mode,
             }
             for match, ex in ((m, ex) for ex in self.exercises for m in ex.matches)
         ]
@@ -125,6 +135,12 @@ def load_mapping(path: Path) -> Mapping:
                 )
             visto[match.key] = name
             matches.append(match)
+        weight_mode = str(raw.get("weight_mode") or "carico")
+        if weight_mode not in WEIGHT_MODES:
+            raise MappingError(
+                f"{path}: {name!r} ha weight_mode {weight_mode!r}; "
+                f"valori ammessi: {', '.join(sorted(WEIGHT_MODES))}"
+            )
         secondary = raw.get("secondary") or []
         if isinstance(secondary, str):
             secondary = [secondary]
@@ -134,6 +150,7 @@ def load_mapping(path: Path) -> Mapping:
                 primary_group=raw.get("primary"),
                 secondary_groups=tuple(str(s) for s in secondary),
                 matches=tuple(matches),
+                weight_mode=weight_mode,
             )
         )
 

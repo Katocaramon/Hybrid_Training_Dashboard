@@ -22,8 +22,11 @@ def test_mappatura_del_repo_e_valida():
     assert len(m.exercises) > 0
     assert m.focus_groups == ("hamstring", "adduttori", "glutei")
     # il pull-up assistito e' l'unica chiave confermata da un file reale
-    assert m.by_raw_key["pull_up/band_assisted_pull_up"].name == "Band-assisted pull-up"
-    assert m.by_raw_key["pull_up/band_assisted_pull_up"].primary_group == "dorsali"
+    trazioni = m.by_raw_key["pull_up/band_assisted_pull_up"]
+    assert trazioni.name == "Trazioni assistite"
+    assert trazioni.primary_group == "dorsali"
+    # il peso registrato e' l'assistenza, non il carico
+    assert trazioni.weight_mode == "assistenza"
 
 
 def test_i_sette_esercizi_del_programma_ci_sono():
@@ -34,7 +37,7 @@ def test_i_sette_esercizi_del_programma_ci_sono():
         "Bulgarian split squat",
         "Step-up",
         "Copenhagen plank",
-        "Band-assisted pull-up",
+        "Trazioni assistite",  # ex "band-assisted pull-up"
         "Military press",
     ]:
         assert atteso in nomi

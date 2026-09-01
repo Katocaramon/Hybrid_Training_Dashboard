@@ -39,7 +39,7 @@ from typing import Any, Iterable
 
 from .fit_parser import ParsedActivity
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Migrazione 1: schema iniziale.
 _MIGRATION_1 = """
@@ -166,7 +166,33 @@ CREATE TABLE exercise_map (
 );
 """
 
-_MIGRATIONS = [_MIGRATION_1, _MIGRATION_2]
+# Migrazione 3: tempi in epoch, peso corporeo e modo del carico.
+#
+# Gli epoch servono per incrociare le serie con i campioni di FC in SQL: gli
+# ISO con fuso orario si confrontano male fra loro, un numero no.
+#
+# `weight_mode` esiste perche' non tutti i pesi sono carichi. Alle trazioni
+# assistite il peso registrato e' l'*aiuto* della macchina: piu' e' alto, piu'
+# la serie e' facile. Moltiplicarlo per le ripetizioni darebbe un tonnellaggio
+# non solo sbagliato ma rovesciato di segno.
+_MIGRATION_3 = """
+ALTER TABLE sets ADD COLUMN start_epoch REAL;
+ALTER TABLE sets ADD COLUMN end_epoch REAL;
+ALTER TABLE hr_samples ADD COLUMN epoch REAL;
+ALTER TABLE sessions ADD COLUMN body_weight_kg REAL;
+ALTER TABLE exercise_map ADD COLUMN weight_mode TEXT NOT NULL DEFAULT 'carico';
+
+UPDATE sets SET
+    start_epoch = CAST(strftime('%s', start_time_utc) AS REAL),
+    end_epoch = CAST(strftime('%s', start_time_utc) AS REAL) + COALESCE(duration_s, 0)
+WHERE start_time_utc IS NOT NULL;
+UPDATE hr_samples SET epoch = CAST(strftime('%s', ts_utc) AS REAL);
+
+CREATE INDEX IF NOT EXISTS idx_hr_epoch ON hr_samples (session_id, epoch);
+CREATE INDEX IF NOT EXISTS idx_sets_epoch ON sets (session_id, start_epoch);
+"""
+
+_MIGRATIONS = [_MIGRATION_1, _MIGRATION_2, _MIGRATION_3]
 
 # L'ultima correzione per ogni serie.
 _VIEWS = """
@@ -202,6 +228,7 @@ SELECT
              s.raw_exercise_label, s.raw_exercise_key)      AS exercise_name,
     COALESCE(ms.primary_group, mg.primary_group)            AS muscle_group,
     COALESCE(ms.secondary_groups, mg.secondary_groups)      AS secondary_groups,
+    COALESCE(ms.weight_mode, mg.weight_mode, 'carico')      AS weight_mode,
     CASE WHEN ms.raw_key IS NULL AND mg.raw_key IS NULL THEN 1 ELSE 0 END AS unmapped,
     COALESCE(c.reps, s.reps)                                AS reps,
     COALESCE(c.weight_kg, s.weight_kg)                      AS weight_kg,
@@ -213,11 +240,48 @@ SELECT
         WHEN c.reps IS NOT NULL OR c.weight_kg IS NOT NULL THEN 'correzione'
         ELSE 'file'
     END                                                     AS data_source,
+    -- Carico effettivo sollevato dalla serie. Dipende dal modo:
+    --   carico       -> il peso registrato
+    --   assistenza   -> peso corporeo meno l'aiuto della macchina/elastico
+    --   corpo_libero -> il peso corporeo
+    -- Per assistenza e corpo libero e' una stima esplicita, segnalata da
+    -- `carico_stimato`: senza peso corporeo nel file resta NULL.
+    CASE COALESCE(ms.weight_mode, mg.weight_mode, 'carico')
+        WHEN 'assistenza' THEN
+            CASE WHEN ses.body_weight_kg IS NULL
+                      OR COALESCE(c.weight_kg, s.weight_kg) IS NULL THEN NULL
+                 ELSE ses.body_weight_kg - COALESCE(c.weight_kg, s.weight_kg) END
+        WHEN 'corpo_libero' THEN ses.body_weight_kg
+        ELSE COALESCE(c.weight_kg, s.weight_kg)
+    END                                                     AS carico_effettivo_kg,
+    CASE WHEN COALESCE(ms.weight_mode, mg.weight_mode, 'carico') = 'carico'
+         THEN 0 ELSE 1 END                                  AS carico_stimato,
+    -- Tonnellaggio: solo dove il peso e' davvero un carico esterno. Un peso
+    -- che indica l'assistenza non si moltiplica per le ripetizioni, e il
+    -- corpo libero non e' un carico sollevato dal bilanciere.
     CASE
+        WHEN COALESCE(ms.weight_mode, mg.weight_mode, 'carico') <> 'carico' THEN NULL
         WHEN COALESCE(c.reps, s.reps) IS NULL THEN NULL
         WHEN COALESCE(c.weight_kg, s.weight_kg) IS NULL THEN NULL
         ELSE COALESCE(c.reps, s.reps) * COALESCE(c.weight_kg, s.weight_kg)
-    END                                                     AS volume_kg
+    END                                                     AS volume_kg,
+    -- Tonnellaggio stimato sul carico effettivo: utile per le trazioni
+    -- assistite, ma tenuto separato perche' poggia sul peso corporeo.
+    CASE
+        WHEN COALESCE(ms.weight_mode, mg.weight_mode, 'carico') = 'carico' THEN NULL
+        WHEN COALESCE(c.reps, s.reps) IS NULL THEN NULL
+        WHEN COALESCE(ms.weight_mode, mg.weight_mode) = 'assistenza'
+             AND (ses.body_weight_kg IS NULL
+                  OR COALESCE(c.weight_kg, s.weight_kg) IS NULL) THEN NULL
+        WHEN ses.body_weight_kg IS NULL THEN NULL
+        ELSE COALESCE(c.reps, s.reps) * (
+            CASE COALESCE(ms.weight_mode, mg.weight_mode)
+                WHEN 'assistenza' THEN ses.body_weight_kg - COALESCE(c.weight_kg, s.weight_kg)
+                ELSE ses.body_weight_kg
+            END)
+    END                                                     AS volume_stimato_kg,
+    s.start_epoch,
+    s.end_epoch
 FROM sets s
 JOIN sessions ses ON ses.id = s.session_id
 LEFT JOIN v_corrections_effective c
@@ -232,6 +296,24 @@ LEFT JOIN exercise_map ms
 LEFT JOIN exercise_map mg
        ON mg.raw_key = COALESCE(c.exercise_key, s.raw_exercise_key)
       AND mg.note = '';
+
+-- FC media e massima dentro la finestra temporale di ogni serie.
+-- Il confronto e' su epoch e non su stringhe ISO: i fusi orari rendono il
+-- confronto testuale inaffidabile.
+DROP VIEW IF EXISTS v_set_hr;
+CREATE VIEW v_set_hr AS
+SELECT s.id           AS set_id,
+       s.session_id,
+       COUNT(h.bpm)   AS n_campioni,
+       ROUND(AVG(h.bpm), 1) AS avg_bpm,
+       MAX(h.bpm)     AS max_bpm
+FROM sets s
+JOIN hr_samples h
+  ON h.session_id = s.session_id
+ AND h.epoch >= s.start_epoch
+ AND h.epoch < s.end_epoch
+WHERE s.start_epoch IS NOT NULL AND s.end_epoch > s.start_epoch
+GROUP BY s.id;
 """
 
 
@@ -343,10 +425,10 @@ def store_activity(conn: sqlite3.Connection, act: ParsedActivity) -> tuple[int, 
                session_uid, activity_type, garmin_activity_id, sport, sub_sport,
                start_time_utc, start_time_local, local_date, iso_year, iso_week,
                utc_offset_s, total_elapsed_s, total_timer_s, avg_hr, max_hr, calories,
-               total_training_effect, sport_profile_name, workout_name,
+               total_training_effect, body_weight_kg, sport_profile_name, workout_name,
                device_manufacturer, device_product, device_serial,
                source_path, source_sha256, ingested_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT(session_uid) DO UPDATE SET
                sport=excluded.sport, sub_sport=excluded.sub_sport,
                start_time_utc=excluded.start_time_utc,
@@ -357,6 +439,7 @@ def store_activity(conn: sqlite3.Connection, act: ParsedActivity) -> tuple[int, 
                total_timer_s=excluded.total_timer_s, avg_hr=excluded.avg_hr,
                max_hr=excluded.max_hr, calories=excluded.calories,
                total_training_effect=excluded.total_training_effect,
+               body_weight_kg=excluded.body_weight_kg,
                sport_profile_name=excluded.sport_profile_name,
                workout_name=excluded.workout_name,
                device_manufacturer=excluded.device_manufacturer,
@@ -382,6 +465,7 @@ def store_activity(conn: sqlite3.Connection, act: ParsedActivity) -> tuple[int, 
             ses.max_hr,
             ses.calories,
             ses.total_training_effect,
+            ses.body_weight_kg,
             ses.sport_profile_name,
             ses.workout_name,
             act.device.manufacturer,
@@ -402,8 +486,9 @@ def store_activity(conn: sqlite3.Connection, act: ParsedActivity) -> tuple[int, 
                session_id, set_index, order_in_session, set_type, start_time_utc,
                duration_s, reps, weight_kg, weight_display_unit, planned_reps,
                planned_weight_kg, wkt_step_index, wkt_step_note, raw_exercise_key,
-               raw_exercise_label, category_raw, subcategory_raw)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               raw_exercise_label, category_raw, subcategory_raw,
+               start_epoch, end_epoch)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         [
             (
                 session_id,
@@ -423,6 +508,8 @@ def store_activity(conn: sqlite3.Connection, act: ParsedActivity) -> tuple[int, 
                 s.exercise_label,
                 json.dumps([c for c in s.category_raw]),
                 json.dumps([c for c in s.subcategory_raw]),
+                s.start_time.timestamp() if s.start_time else None,
+                s.end_time.timestamp() if s.end_time else None,
             )
             for order, s in enumerate(act.sets)
         ],
@@ -430,8 +517,8 @@ def store_activity(conn: sqlite3.Connection, act: ParsedActivity) -> tuple[int, 
 
     conn.execute("DELETE FROM hr_samples WHERE session_id = ?", (session_id,))
     conn.executemany(
-        "INSERT OR REPLACE INTO hr_samples (session_id, ts_utc, bpm) VALUES (?,?,?)",
-        [(session_id, _iso(h.timestamp), h.bpm) for h in act.hr_samples],
+        "INSERT OR REPLACE INTO hr_samples (session_id, ts_utc, bpm, epoch) VALUES (?,?,?,?)",
+        [(session_id, _iso(h.timestamp), h.bpm, h.timestamp.timestamp()) for h in act.hr_samples],
     )
 
     conn.execute(
@@ -455,6 +542,7 @@ def refresh_exercise_map(conn: sqlite3.Connection, entries: Iterable[dict[str, A
             e["exercise_name"],
             e.get("primary_group"),
             json.dumps(e.get("secondary_groups") or [], ensure_ascii=False),
+            e.get("weight_mode") or "carico",
             _now(),
         )
         for e in entries
@@ -462,8 +550,8 @@ def refresh_exercise_map(conn: sqlite3.Connection, entries: Iterable[dict[str, A
     conn.execute("DELETE FROM exercise_map")
     conn.executemany(
         """INSERT INTO exercise_map (raw_key, note, exercise_name, primary_group,
-                                     secondary_groups, updated_at)
-           VALUES (?,?,?,?,?,?)""",
+                                     secondary_groups, weight_mode, updated_at)
+           VALUES (?,?,?,?,?,?,?)""",
         rows,
     )
     conn.commit()
@@ -502,6 +590,52 @@ def add_correction(
     )
     conn.commit()
     return int(cur.lastrowid)
+
+
+def set_id_by_position(
+    conn: sqlite3.Connection,
+    local_date: str,
+    n_serie_attiva: int,
+    seduta: str | None = None,
+) -> int:
+    """Trova una serie per data e numero di serie *attiva*, come su Connect.
+
+    Garmin Connect numera le serie attive da 1, pause escluse: e' il modo
+    naturale di trascrivere i carichi guardando l'app. Se in quel giorno c'e'
+    piu' di una seduta serve `seduta`, confrontata con il nome
+    dell'allenamento o con il `session_uid`.
+    """
+    sessioni = conn.execute(
+        """SELECT id, session_uid, workout_name FROM sessions
+           WHERE local_date = ? ORDER BY start_time_utc""",
+        (local_date,),
+    ).fetchall()
+    if not sessioni:
+        raise KeyError(f"nessuna seduta il {local_date}")
+    if seduta:
+        sessioni = [
+            r
+            for r in sessioni
+            if seduta.lower() in (r["workout_name"] or "").lower()
+            or seduta.lower() in r["session_uid"].lower()
+        ]
+        if not sessioni:
+            raise KeyError(f"nessuna seduta il {local_date} che corrisponda a {seduta!r}")
+    if len(sessioni) > 1:
+        nomi = ", ".join(r["workout_name"] or r["session_uid"] for r in sessioni)
+        raise KeyError(
+            f"{len(sessioni)} sedute il {local_date} ({nomi}): serve la colonna 'seduta'"
+        )
+    riga = conn.execute(
+        """SELECT id FROM sets
+           WHERE session_id = ? AND set_type = 'active'
+           ORDER BY order_in_session
+           LIMIT 1 OFFSET ?""",
+        (sessioni[0]["id"], n_serie_attiva - 1),
+    ).fetchone()
+    if riga is None:
+        raise KeyError(f"la seduta del {local_date} non ha una serie attiva n. {n_serie_attiva}")
+    return int(riga["id"])
 
 
 def unmapped_raw_keys(conn: sqlite3.Connection) -> list[sqlite3.Row]:
