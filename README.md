@@ -29,6 +29,89 @@ Tutte e cinque sono complete: `ingest` + `report` è il flusso del dopo-allename
 I comandi non ancora implementati escono con codice `1` e lo dicono: non
 fingono di aver lavorato.
 
+## Come si usa, dall'inizio
+
+Gira **in locale sul tuo Mac**. Non c'è niente da mettere online: il database,
+i `.fit` e la dashboard restano sul tuo disco.
+
+### 1. Una volta sola: installare
+
+```bash
+git clone https://github.com/Katocaramon/Hybrid_Training_Dashboard.git
+cd Hybrid_Training_Dashboard
+uv sync
+```
+
+Se `uv` non ce l'hai: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+(oppure `brew install uv`). In alternativa il fallback con venv è più sotto.
+
+Il repo ha un solo branch, `claude/strength-tracker-garmin-fit-hmc1px`, ed è
+già quello di default: `git clone` ti dà direttamente questo.
+
+### 2. Dopo ogni seduta: prendere il file `.fit`
+
+Due strade, stesso file.
+
+**Da Garmin Connect (web).** Apri l'attività → ingranaggio in alto a destra →
+**"Esporta originale"**. Scarichi uno zip con dentro `<id>_ACTIVITY.fit`.
+
+> Deve essere **"Esporta originale"**. TCX, GPX e CSV non contengono i messaggi
+> `set`, quindi niente serie, niente carichi, niente FC per serie.
+
+**Dall'orologio via USB.** Collega l'Epix al Mac: compare come disco, i file
+stanno in `GARMIN/Activity/` e si chiamano tipo `2026-09-01-06-50-09.fit`.
+Sono gli stessi file originali. Il nome non conta: se manca l'id di Connect
+l'identità della seduta viene dal seriale dell'orologio più l'ora di creazione,
+quindi l'ingestione resta idempotente lo stesso.
+
+### 3. Ogni volta: due comandi
+
+Copia i `.fit` (anche più d'uno, anche in sottocartelle) in `data/fit/` e lancia:
+
+```bash
+make session
+```
+
+Che è `ingest` seguito da `report`. Poi apri `output/dashboard.html` con doppio
+click — oppure `open output/dashboard.html`.
+
+Se i file li tieni altrove: `make session FIT=~/Downloads/garmin`. La cartella
+`data/` è già in `.gitignore`, i tuoi allenamenti non finiscono mai su GitHub.
+
+**Rilanciarlo non fa danni.** I file già letti vengono saltati, la stessa
+seduta non entra due volte nemmeno se rinomini il file, e le correzioni manuali
+sopravvivono. Puoi tenere lì dentro tutto lo storico e ridare `make session`
+ogni volta.
+
+### 4. Le prime volte: completare la mappatura
+
+```bash
+strength-tracker unmapped          # cosa non riconosce ancora
+strength-tracker unmapped --yaml   # le voci pronte da incollare
+```
+
+Incolli in `config/exercise_mapping.yaml`, rilanci `make report`: **non serve
+re-importare niente**, la mappatura si applica in lettura.
+
+### 5. Quando un carico manca o è sbagliato
+
+```bash
+strength-tracker stats                              # trova la serie
+strength-tracker correct 42 --reps 8 --weight 62.5  # la corregge
+```
+
+I dati grezzi non vengono toccati: la correzione ci va sopra e la dashboard
+segnala quali valori vengono dal file e quali da te.
+
+### Dove finisce cosa
+
+| Cosa | Dove | Nel repo? |
+| --- | --- | --- |
+| I tuoi `.fit` | `data/fit/` | no, ignorato |
+| Database | `data/strength.db` | no, ignorato |
+| Dashboard | `output/dashboard.html` | no, ignorato |
+| Mappatura esercizi | `config/exercise_mapping.yaml` | sì, versionata |
+
 ## Cosa contiene davvero un file FIT di forza
 
 Verificato su un file reale (Epix Pro Gen 2, export Garmin Connect
@@ -301,16 +384,7 @@ gruppo i più piccoli confluiscono in "altri", che dichiara cosa contiene. Ogni
 grafico ha la sua tabella, e le stime poco affidabili (e1RM oltre le 12
 ripetizioni) cambiano **forma** del punto, non solo colore.
 
-## Installazione
-
-Con [uv](https://docs.astral.sh/uv/) (consigliato):
-
-```bash
-uv sync
-uv run strength-tracker --help
-```
-
-Fallback senza uv:
+## Installazione senza uv
 
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
@@ -318,7 +392,10 @@ pip install -r requirements-dev.txt -e .
 strength-tracker --help
 ```
 
-## Uso
+Con questa strada i comandi si lanciano come `strength-tracker ...` invece di
+`uv run strength-tracker ...` (e il `Makefile` va adattato di conseguenza).
+
+## Tutti i comandi
 
 ```bash
 strength-tracker ingest <path>          # file singolo o cartella, ricorsivo
