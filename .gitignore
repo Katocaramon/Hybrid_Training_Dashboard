@@ -1,0 +1,27 @@
+# --- dati personali: non finiscono mai nel repo ---
+data/
+output/
+*.fit
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# eccezione: le fixture di test sono FIT sintetici/anonimizzati e vanno versionate
+!tests/fixtures/*.fit
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# --- macOS / editor ---
+.DS_Store
+.idea/
+.vscode/

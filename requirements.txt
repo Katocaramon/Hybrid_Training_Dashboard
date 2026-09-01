@@ -1,0 +1,4 @@
+# Fallback per chi non usa uv:  python3.11 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt -e .
+fitdecode>=0.10.0
+PyYAML>=6.0
+Jinja2>=3.1

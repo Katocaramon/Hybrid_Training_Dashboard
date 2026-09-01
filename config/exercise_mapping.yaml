@@ -1,0 +1,66 @@
+# Mappatura esercizi Garmin -> nomi reali del programma.
+# File versionato ed editabile a mano: e' la fonte di verita' della
+# normalizzazione, il codice non indovina nulla da solo.
+#
+# Schema (definitivo dalla Fase 4, chiavi `match` da completare dopo aver
+# ispezionato un file .fit reale):
+#
+#   exercises:
+#     - name: "nome che voglio vedere in dashboard"
+#       primary: gruppo muscolare primario
+#       secondary: [gruppi secondari]
+#       match:                 # criteri sui dati grezzi Garmin, in OR
+#         - category: DEADLIFT           # categoria del catalogo Garmin
+#           exercise_name: TRAP_BAR_DEADLIFT   # sotto-nome, opzionale
+#         - category: 6                  # anche indici numerici grezzi
+#           exercise_name: 12
+#
+# Le voci `match` sono vuote finche' non vediamo come l'Epix Pro Gen 2 scrive
+# davvero questi esercizi: meglio un esercizio `unmapped` che una mappatura
+# inventata. `strength-tracker unmapped` elenca i grezzi da assegnare.
+
+exercises:
+  - name: Trap bar deadlift
+    primary: catena_posteriore
+    secondary: [glutei, hamstring, quadricipiti]
+    note: >-
+      Probabilmente registrato come DEADLIFT generico: la trap bar non ha
+      quasi mai una voce dedicata nel catalogo Garmin.
+    match: []
+
+  - name: Dumbbell romanian deadlift
+    primary: hamstring
+    secondary: [glutei, catena_posteriore]
+    match: []
+
+  - name: Bulgarian split squat
+    primary: quadricipiti
+    secondary: [glutei]
+    match: []
+
+  - name: Step-up
+    primary: quadricipiti
+    secondary: [glutei]
+    match: []
+
+  - name: Copenhagen plank
+    primary: adduttori
+    secondary: [core]
+    note: >-
+      Quasi certamente assente dal catalogo Garmin: arrivera' come esercizio
+      generico o non riconosciuto. Va agganciato a mano.
+    match: []
+
+  - name: Band-assisted pull-up
+    primary: dorsali
+    secondary: [bicipiti]
+    match: []
+
+  - name: Military press
+    primary: spalle
+    secondary: [tricipiti]
+    match: []
+
+# Gruppi muscolari sotto osservazione speciale nella dashboard (interferenza
+# con il carico di corsa).
+focus_groups: [hamstring, adduttori, glutei]
