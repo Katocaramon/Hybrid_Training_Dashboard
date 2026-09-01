@@ -1,40 +1,41 @@
 # Strength Tracker
 
-Strumento locale per analizzare le sedute di **forza** registrate con un Garmin
-Epix Pro Gen 2 ed esportate in `.fit`. Le ripetizioni e i carichi sono inseriti
-a mano sull'orologio durante la seduta, quindi i file contengono gia' i dati a
-livello di singola serie.
+***English** · [Italiano](README.it.md)*
 
-Non e' un'app da bodybuilding: l'obiettivo e' capire se la palestra sta
-costruendo forza **senza interferire con il carico di corsa**, con attenzione
-particolare a hamstring, adduttori e glutei.
+A local tool for analysing **strength** sessions recorded on a Garmin Epix Pro
+Gen 2 and exported as `.fit`. Reps and loads are entered by hand on the watch
+during the session, so the files already carry set-level data.
 
-Tutto gira in locale: nessun servizio cloud, nessuna chiamata di rete a
-runtime, nessun account Garmin Connect. I file `.fit` sorgente non vengono mai
-modificati ne' spostati.
+This is not a bodybuilding app. The point is to tell whether the gym work is
+actually building strength **without interfering with running load**, with
+particular attention to hamstrings, adductors and glutes.
 
-## Stato dei lavori
+Everything runs locally: no cloud service, no network calls at runtime, no
+Garmin Connect account. The source `.fit` files are never modified or moved.
 
-Il progetto procede per fasi, con una verifica alla fine di ognuna.
-Tutte e cinque sono complete: `ingest` + `report` è il flusso del dopo-allenamento.
+> The dashboard and the CLI output are in **Italian** by design — this is a
+> personal tool for an Italian-speaking athlete. The code, the schema and this
+> document are in English.
 
-| Fase | Contenuto | Stato |
+## Status
+
+The project was built in five phases, each verified before moving on. All five
+are complete: `ingest` + `report` is the post-workout flow.
+
+| Phase | Contents | Status |
 | --- | --- | --- |
-| 1 | Scheletro del repo, `pyproject`, CLI funzionante | ✅ fatto |
-| 2 | Parser FIT + test + dump JSON di ispezione | ✅ fatto |
-| 3 | Schema SQLite, ingestione idempotente, mappatura, correzioni | ✅ fatto |
-| 4 | Metriche (volume, e1RM, densità, deriva FC) | ✅ fatto |
-| 5 | Dashboard HTML | ✅ fatto |
+| 1 | Repo skeleton, `pyproject`, working CLI | ✅ done |
+| 2 | FIT parser + tests + JSON inspection dump | ✅ done |
+| 3 | SQLite schema, idempotent ingestion, mapping, corrections | ✅ done |
+| 4 | Metrics (volume, e1RM, density, HR drift) | ✅ done |
+| 5 | HTML dashboard | ✅ done |
 
-I comandi non ancora implementati escono con codice `1` e lo dicono: non
-fingono di aver lavorato.
+## Getting started
 
-## Come si usa, dall'inizio
+It runs **locally on your Mac**. There is nothing to put online: the database,
+the `.fit` files and the dashboard all stay on your disk.
 
-Gira **in locale sul tuo Mac**. Non c'è niente da mettere online: il database,
-i `.fit` e la dashboard restano sul tuo disco.
-
-### 1. Una volta sola: installare
+### 1. Once: install
 
 ```bash
 git clone https://github.com/Katocaramon/Hybrid_Training_Dashboard.git
@@ -42,290 +43,291 @@ cd Hybrid_Training_Dashboard
 uv sync
 ```
 
-Se `uv` non ce l'hai: `curl -LsSf https://astral.sh/uv/install.sh | sh`
-(oppure `brew install uv`). In alternativa il fallback con venv è più sotto.
+If you don't have `uv`: `brew install uv`, or
+`curl -LsSf https://astral.sh/uv/install.sh | sh`. A plain-venv fallback is
+documented further down.
 
-Il repo ha un solo branch, `claude/strength-tracker-garmin-fit-hmc1px`, ed è
-già quello di default: `git clone` ti dà direttamente questo.
+The repo has a single branch, `claude/strength-tracker-garmin-fit-hmc1px`, and
+it is already the default: `git clone` gives you exactly that.
 
-### 2. Dopo ogni seduta: prendere il file `.fit`
+### 2. After each session: get the `.fit` file
 
-Due strade, stesso file.
+Two routes, same file.
 
-**Da Garmin Connect (web).** Apri l'attività → ingranaggio in alto a destra →
-**"Esporta originale"**. Scarichi uno zip con dentro `<id>_ACTIVITY.fit`.
+**From Garmin Connect (web).** Open the activity → gear icon, top right →
+**"Export Original"**. You get a zip containing `<id>_ACTIVITY.fit`.
 
-> Deve essere **"Esporta originale"**. TCX, GPX e CSV non contengono i messaggi
-> `set`, quindi niente serie, niente carichi, niente FC per serie.
+> It has to be **Export Original**. TCX, GPX and CSV do not contain `set`
+> messages, so no sets, no loads, no per-set heart rate.
 
-**Dall'orologio via USB.** Collega l'Epix al Mac: compare come disco, i file
-stanno in `GARMIN/Activity/` e si chiamano tipo `2026-09-01-06-50-09.fit`.
-Sono gli stessi file originali. Il nome non conta: se manca l'id di Connect
-l'identità della seduta viene dal seriale dell'orologio più l'ora di creazione,
-quindi l'ingestione resta idempotente lo stesso.
+**From the watch over USB.** Plug the Epix into the Mac: it mounts as a disk,
+and the files live in `GARMIN/Activity/`, named like
+`2026-09-01-06-50-09.fit`. These are the same original files. The filename
+doesn't matter: without a Connect id, session identity falls back to the
+device serial plus creation time, so ingestion stays idempotent either way.
 
-### 3. Ogni volta: due comandi
+### 3. Every time: two commands
 
-Copia i `.fit` (anche più d'uno, anche in sottocartelle) in `data/fit/` e lancia:
+Drop the `.fit` files (any number, subdirectories included) into `data/fit/`
+and run:
 
 ```bash
 make session
 ```
 
-Che è `ingest` seguito da `report`. Poi apri `output/dashboard.html` con doppio
-click — oppure `open output/dashboard.html`.
+That is `ingest` followed by `report`. Then open `output/dashboard.html` —
+double-click it, or `open output/dashboard.html`.
 
-Se i file li tieni altrove: `make session FIT=~/Downloads/garmin`. La cartella
-`data/` è già in `.gitignore`, i tuoi allenamenti non finiscono mai su GitHub.
+If you keep the files elsewhere: `make session FIT=~/Downloads/garmin`. The
+`data/` directory is already in `.gitignore`, so your training never reaches
+GitHub.
 
-**Rilanciarlo non fa danni.** I file già letti vengono saltati, la stessa
-seduta non entra due volte nemmeno se rinomini il file, e le correzioni manuali
-sopravvivono. Puoi tenere lì dentro tutto lo storico e ridare `make session`
-ogni volta.
+**Re-running is safe.** Files already read are skipped, the same session never
+lands twice even if you rename the file, and manual corrections survive. Keep
+your whole history in there and run `make session` as often as you like.
 
-### 4. Le prime volte: completare la mappatura
-
-```bash
-strength-tracker unmapped          # cosa non riconosce ancora
-strength-tracker unmapped --yaml   # le voci pronte da incollare
-```
-
-Incolli in `config/exercise_mapping.yaml`, rilanci `make report`: **non serve
-re-importare niente**, la mappatura si applica in lettura.
-
-### 5. Quando un carico manca o è sbagliato
+### 4. Early on: finish the exercise mapping
 
 ```bash
-strength-tracker stats                              # trova la serie
-strength-tracker correct 42 --reps 8 --weight 62.5  # la corregge
+strength-tracker unmapped          # what isn't recognised yet
+strength-tracker unmapped --yaml   # entries ready to paste
 ```
 
-I dati grezzi non vengono toccati: la correzione ci va sopra e la dashboard
-segnala quali valori vengono dal file e quali da te.
+Paste them into `config/exercise_mapping.yaml` and run `make report`:
+**no re-import needed**, the mapping is applied at read time.
 
-### Dove finisce cosa
+### 5. When a load is missing or wrong
 
-| Cosa | Dove | Nel repo? |
+```bash
+strength-tracker stats                              # find the set
+strength-tracker correct 42 --reps 8 --weight 62.5  # fix it
+```
+
+Raw data is never touched: the correction sits on top of it, and the dashboard
+marks which values came from the file and which from you.
+
+### Where things live
+
+| What | Where | In the repo? |
 | --- | --- | --- |
-| I tuoi `.fit` | `data/fit/` | no, ignorato |
-| Database | `data/strength.db` | no, ignorato |
-| Dashboard | `output/dashboard.html` | no, ignorato |
-| Mappatura esercizi | `config/exercise_mapping.yaml` | sì, versionata |
+| Your `.fit` files | `data/fit/` | no, ignored |
+| Database | `data/strength.db` | no, ignored |
+| Dashboard | `output/dashboard.html` | no, ignored |
+| Exercise mapping | `config/exercise_mapping.yaml` | yes, versioned |
 
-## Cosa contiene davvero un file FIT di forza
+## What a strength FIT file actually contains
 
-Verificato su un file reale (Epix Pro Gen 2, export Garmin Connect
-`<activity_id>_ACTIVITY.fit`), non assunto dalla specifica. `strength-tracker
-inspect <file.fit> --raw` rifa' questa ispezione su qualsiasi file, campi
-`unknown_*` compresi: e' il primo comando da lanciare se un firmware nuovo
-cambia le carte in tavola.
+Verified against real files (Epix Pro Gen 2, Garmin Connect
+`<activity_id>_ACTIVITY.fit` export), not assumed from the spec.
+`strength-tracker inspect <file.fit> --raw` redoes this inspection on any file,
+`unknown_*` fields included — it's the first command to run if a firmware
+update changes the rules.
 
-- **`set` (msg 225)** — una riga per serie *e* per pausa (`set_type` =
-  `active` / `rest`). Campi utili: `message_index`, `start_time`, `duration`,
-  `repetitions`, `weight` (kg, scala 16), `weight_display_unit`, `category`,
-  `category_subtype`, `wkt_step_index`.
-- `set.timestamp` **non** e' l'orario della serie: e' costante e pari
-  all'inizio della sessione. L'orario vero e' `start_time`.
-- `category` e `category_subtype` sono **array** (3 slot, spesso ripetuti o
-  nulli): un set puo' dichiarare piu' categorie. Si legge a coppie e si usa la
-  prima valida, conservando comunque l'array completo.
-- Gli esercizi sono **indici numerici** di un catalogo chiuso
-  (`category=21, subtype=42`). Il profilo FIT incluso in `fitdecode` contiene
-  gli enum completi (53 categorie, 51 cataloghi di nomi), quindi la coppia
-  diventa uno slug stabile: `pull_up/band_assisted_pull_up`. Se categoria o
-  indice non sono nel profilo si tiene il numero grezzo (`pull_up/42`,
-  `250/7`): niente crash, niente nomi inventati, e la serie finisce fra i non
-  mappati.
-- **`exercise_title` (msg 264)** — l'orologio scrive nel file stesso una
-  tabella `(categoria, nome) -> etichetta` ("Band-assisted Pull-up"): la
-  usiamo come etichetta leggibile quando c'e'.
-- **`workout_step` (msg 27)** — se la seduta segue un allenamento
-  strutturato, `set.wkt_step_index` punta qui e dà ripetizioni
-  (`duration_reps`) e peso (`exercise_weight`, scala **100**, non 16)
-  **pianificati**. Sono valori pianificati, non eseguiti: restano in colonne
-  separate e non entrano mai nel volume.
-- **`workout_step.notes` porta il nome vero degli esercizi fuori catalogo.**
-  Il Copenhagen plank nel catalogo Garmin non esiste: viene registrato come
-  `plank/side_plank`, e a distinguerlo da un plank laterale vero è solo la
-  nota dello step, "Copenhagen plank". La stessa chiave grezza può quindi
-  voler dire due esercizi diversi in due sedute diverse, e la mappatura sa
-  qualificarci sopra (vedi sotto).
-- Le etichette di `exercise_title` sono **nella lingua dell'orologio**
-  ("Stacco con Trap-bar"). Lo slug del catalogo resta invece stabile e in
-  inglese: è quello la chiave di mappatura, l'etichetta è solo per leggere.
-- **`record` (msg 20)** — frequenza cardiaca a 1 Hz per tutta la seduta
-  (~4300 campioni per 70 minuti).
-- **`session` (msg 18)** — `total_timer_time` e' il tempo attivo (non esiste
-  un campo dedicato), piu' FC media/max, calorie, `sport_profile_name`.
-- **Non esiste un campo `activity_id`** dentro il FIT: l'id di Garmin Connect
-  sta solo nel nome del file esportato.
-- L'offset dal fuso locale si ricava da `activity.local_timestamp -
-  activity.timestamp`. Serve per datare correttamente le sedute serali.
+- **`set` (msg 225)** — one row per set *and* per rest (`set_type` =
+  `active` / `rest`). Useful fields: `message_index`, `start_time`,
+  `duration`, `repetitions`, `weight` (kg, scale 16), `weight_display_unit`,
+  `category`, `category_subtype`, `wkt_step_index`.
+- `set.timestamp` is **not** the set's time: it is constant and equal to the
+  session start. The real time is `start_time`.
+- `category` and `category_subtype` are **arrays** (3 slots, often repeated or
+  null): a set can declare more than one category. They are read pairwise, the
+  first valid pair is used, and the full arrays are kept.
+- Exercises are **numeric indices** into a closed catalogue (`category=21,
+  subtype=42`). The FIT profile bundled with `fitdecode` carries the complete
+  enums (53 categories, 51 name catalogues), so the pair becomes a stable slug:
+  `pull_up/band_assisted_pull_up`. If the category or the index isn't in the
+  profile, the raw number is kept (`pull_up/42`, `250/7`): no crash, no
+  invented names, and the set shows up as unmapped.
+- **`exercise_title` (msg 264)** — the watch writes a `(category, name) ->
+  label` table into the file itself ("Band-assisted Pull-up"). It's used as the
+  human-readable label when present.
+- **`workout_step` (msg 27)** — if the session follows a structured workout,
+  `set.wkt_step_index` points here and yields **planned** reps
+  (`duration_reps`) and weight (`exercise_weight`, scale **100**, not 16).
+  These are planned, not performed: they live in separate columns and never
+  enter volume.
+- **`workout_step.notes` carries the real name of off-catalogue exercises.**
+  The Copenhagen plank doesn't exist in the Garmin catalogue: it is recorded as
+  `plank/side_plank`, and the only thing separating it from an actual side
+  plank is the step note, "Copenhagen plank". The same raw key can therefore
+  mean two different exercises in two different sessions, and the mapping can
+  qualify on that (see below).
+- `exercise_title` labels are **in the watch's language** ("Stacco con
+  Trap-bar"). The catalogue slug stays stable and English: the slug is the
+  mapping key, the label is only for reading.
+- **`record` (msg 20)** — heart rate at 1 Hz for the whole session (~4,300
+  samples over 70 minutes).
+- **`session` (msg 18)** — `total_timer_time` is the active time (there is no
+  dedicated field), plus average/max HR, calories, `sport_profile_name`.
+- **There is no `activity_id` field** inside the FIT: the Garmin Connect id
+  exists only in the exported filename.
+- The local UTC offset is derived from `activity.local_timestamp -
+  activity.timestamp`. It is what dates evening sessions correctly.
 
-### Identita' di una seduta
+### Session identity
 
-`session_uid` in ordine di preferenza:
+`session_uid`, in order of preference:
 
-1. `garmin:<activity_id>` dal nome del file esportato;
-2. `device:<serial>:<time_created>` — stabile anche se riesporti lo stesso
-   allenamento e i byte cambiano;
-3. `sha256:<hash del contenuto>`.
+1. `garmin:<activity_id>` from the exported filename;
+2. `device:<serial>:<time_created>` — stable even if you re-export the same
+   workout and the bytes change;
+3. `sha256:<content hash>`.
 
-E' la chiave su cui poggia l'idempotenza dell'ingestione (Fase 3).
+This is the key idempotent ingestion rests on.
 
-### Tolleranza agli errori
+### Error tolerance
 
-File troncati, file non-FIT e attivita' senza messaggi `set` (una corsa, per
-dire) vengono **saltati con un motivo esplicito**, senza far cadere il resto
-del batch. `parse_paths()` restituisce `(path, attivita', motivo_dello_skip)`.
+Truncated files, non-FIT files and activities without `set` messages (a run,
+say) are **skipped with an explicit reason**, without bringing down the rest of
+the batch. `parse_paths()` returns `(path, activity, skip_reason)`.
 
-## Il database
+## The database
 
-Quattro tabelle di dati più due di servizio, nessun ORM:
+Four data tables plus two housekeeping ones, no ORM:
 
-| Tabella | Contenuto |
+| Table | Contents |
 | --- | --- |
-| `sessions` | una riga per attività: `session_uid` univoco, data locale, settimana ISO, durata, tempo attivo, FC media/max, calorie, dispositivo, file sorgente, ora di ingestione |
-| `sets` | una riga per serie **e** per pausa (`set_type`), solo dati grezzi del file |
-| `hr_samples` | frequenza cardiaca a 1 Hz, `(session_id, ts_utc)` come chiave |
-| `corrections` | override manuali, append-only |
-| `exercise_map` | proiezione del YAML di mappatura, riscritta a ogni comando |
-| `ingested_files` | registro dei file già letti, con il motivo degli scarti |
+| `sessions` | one row per activity: unique `session_uid`, local date, ISO week, duration, active time, avg/max HR, calories, device, source file, ingestion time |
+| `sets` | one row per set **and** per rest (`set_type`), raw file data only |
+| `hr_samples` | heart rate at 1 Hz, keyed by `(session_id, ts_utc)` |
+| `corrections` | manual overrides, append-only |
+| `exercise_map` | projection of the mapping YAML, rewritten on every command |
+| `ingested_files` | log of files already read, with the reason for any skip |
 
-### Dati grezzi, mappatura e correzioni restano separati
+### Raw data, mapping and corrections stay separate
 
-`sets` contiene solo quello che c'è nel file. La normalizzazione vive in
-`exercise_map` e le correzioni in `corrections`: la vista **`v_sets`** le
-sovrappone in lettura ai dati grezzi, che non vengono mai riscritti. Tre
-conseguenze pratiche:
+`sets` holds only what is in the file. Normalisation lives in `exercise_map`
+and corrections in `corrections`: the **`v_sets`** view layers them over the
+raw data at read time, and the raw data is never rewritten. Three practical
+consequences:
 
-- editi `config/exercise_mapping.yaml` e rilanci `report`: **niente
-  re-ingestione**, i nomi cambiano subito;
-- ogni riga di `v_sets` porta sia il valore effettivo (`reps`, `weight_kg`)
-  sia quello del file (`reps_raw`, `weight_kg_raw`) e la sua provenienza
-  (`data_source` = `file` o `correzione`);
-- `volume_kg` è `NULL` se manca reps **o** peso. Mai zero al posto di "non
-  misurato": è la differenza fra un plank a corpo libero e un dato assente.
+- edit `config/exercise_mapping.yaml`, run `report`: **no re-ingestion**, the
+  names change immediately;
+- every `v_sets` row carries both the effective value (`reps`, `weight_kg`) and
+  the file's own (`reps_raw`, `weight_kg_raw`), plus its provenance
+  (`data_source` = `file` or `correzione`);
+- `volume_kg` is `NULL` when reps **or** weight is missing. Never zero standing
+  in for "not measured": that is the difference between a bodyweight plank and
+  an absent datum.
 
-Le correzioni non puntano a `sets.id` (che cambia con `--force`) ma alla
-coppia stabile `(session_uid, set_index)`: **sopravvivono alla
-re-ingestione**. Sono append-only, vale l'ultima, e lo storico resta.
+Corrections do not point at `sets.id` (which changes under `--force`) but at
+the stable `(session_uid, set_index)` pair, so they **survive re-ingestion**.
+They are append-only, the latest one wins, and the history is kept.
 
-### Idempotenza su tre livelli
+### Idempotence at three levels
 
-1. i file già letti (stesso percorso, stesso sha256) vengono saltati senza
-   nemmeno riaprirli, salvo `--force`;
-2. `sessions.session_uid` è `UNIQUE`: lo stesso allenamento non entra due
-   volte nemmeno se rinomini o sposti il file;
-3. riscrivere una seduta cancella e reinserisce le sue serie e i suoi
-   campioni FC — nessun duplicato, e le correzioni restano.
+1. files already read (same path, same sha256) are skipped without even
+   reopening them, unless `--force`;
+2. `sessions.session_uid` is `UNIQUE`: the same workout never lands twice, even
+   if you rename or move the file;
+3. rewriting a session deletes and re-inserts its sets and HR samples — no
+   duplicates, and corrections stay put.
 
-### Perché la FC resta a campione singolo
+### Why heart rate is kept sample-by-sample
 
-1 Hz sono ~4.300 righe per seduta, cioè ~700k righe l'anno a 3 sedute a
-settimana: SQLite non se ne accorge. Tenere il grezzo permette di
-ricalcolare la FC per serie anche se domani cambiassero i confini delle
-serie (o se una correzione ne sposta uno). Aggregare subito farebbe
-risparmiare spazio che non è un problema, perdendo dati che non si
-recuperano.
+1 Hz means ~4,300 rows per session, i.e. ~700k rows a year at three sessions a
+week: SQLite doesn't notice. Keeping the raw samples means per-set HR can be
+recomputed even if set boundaries change later (or a correction moves one).
+Aggregating up front would save space that isn't a problem, at the cost of data
+you can't get back.
 
-### Spazio per il carico di corsa
+### Room for running load
 
-`sessions` è già la tabella generica delle attività: ha `activity_type`,
-durata, FC, calorie e la settimana ISO precalcolata. Aggiungere le sedute di
-corsa significa inserirle qui con `activity_type='run'` più una tabella di
-dettaglio (distanza, passo, dislivello) con FK su `sessions(id)`. Nessuna
-migrazione distruttiva, e l'incrocio settimanale palestra/corsa diventa una
-join su `(iso_year, iso_week)`.
+`sessions` is already the generic activity table: it has `activity_type`,
+duration, HR, calories and a precomputed ISO week. Adding running sessions
+means inserting them here with `activity_type='run'` plus a detail table
+(distance, pace, elevation) with an FK on `sessions(id)`. No destructive
+migration, and cross-referencing gym against running by week becomes a join on
+`(iso_year, iso_week)`.
 
-### Reps e carichi: quando ci sono e quando no
+### Reps and loads: when they're there and when they're not
 
-Garmin Connect esporta i `.fit` solo come **"Export Original"**: il file
-originale caricato dall'orologio. Le modifiche fatte dopo dall'app (reps,
-carichi, correzioni) restano nel database di Connect e **non finiscono mai nel
-FIT esportato**.
+Garmin Connect only exports `.fit` as **"Export Original"**: the original file
+uploaded by the watch. Edits made afterwards in the app (reps, loads,
+corrections) stay in Connect's database and **never make it into the exported
+FIT**.
 
-Confermato su due sedute reali:
+Confirmed on two real sessions:
 
-| Seduta | `repetitions` | `weight` |
+| Session | `repetitions` | `weight` |
 | --- | --- | --- |
-| 01/09 "Day 1 Upper Body", valori inseriti dopo sul telefono | assenti su 35 serie | assenti |
-| 01/09 "Day 2 Legs", valori confermati sull'orologio | presenti su 14 serie su 15 | presenti dove il carico c'era |
+| 01/09 "Day 1 Upper Body", values entered later on the phone | absent across 35 sets | absent |
+| 01/09 "Day 2 Legs", values confirmed on the watch | present on 14 of 15 sets | present wherever there was a load |
 
-Quindi i dati arrivano, ma **solo se confermati sull'orologio durante la
-seduta**. Dove mancano, `volume_kg` resta `NULL`: si inseriscono a posteriori
-con `strength-tracker correct <set_id> --reps N --weight K`, che li scrive in
-`corrections` senza toccare i dati grezzi.
+So the data does come through, but **only if confirmed on the watch during the
+session**. Where it's missing, `volume_kg` stays `NULL`; you can fill it in
+afterwards with `strength-tracker correct <set_id> --reps N --weight K`, which
+writes to `corrections` without touching the raw data.
 
-Le metriche che non dipendono dal carico — serie per gruppo muscolare, tempo
-sotto tensione, densità della seduta, deriva della FC — funzionano comunque.
+The metrics that don't depend on load — sets per muscle group, time under
+tension, session density, HR drift — work regardless.
 
-### Quando la stessa chiave grezza vuol dire due esercizi
+### When the same raw key means two different exercises
 
-Il Copenhagen plank arriva come `plank/side_plank`, esattamente come un plank
-laterale vero. A distinguerli è la nota dello step dell'allenamento. La
-mappatura può quindi qualificare una chiave:
+A Copenhagen plank arrives as `plank/side_plank`, exactly like a real side
+plank. What separates them is the workout step note. So a mapping entry can
+qualify a key:
 
 ```yaml
   - name: Copenhagen plank
     primary: adduttori
     match:
       - key: plank/side_plank
-        note: Copenhagen plank      # vince sulla voce generica
+        note: Copenhagen plank      # beats the generic entry
 
   - name: Side plank
     primary: core
-    match: [plank/side_plank]       # senza nota: plank laterale vero
+    match: [plank/side_plank]       # no note: an actual side plank
 ```
 
-`v_sets` fa due join sulla mappatura e la voce qualificata dalla nota ha la
-precedenza. Il confronto è case-insensitive e ignora gli spazi ai bordi.
+`v_sets` joins the mapping twice and the note-qualified entry wins. The
+comparison is case-insensitive and ignores surrounding whitespace.
 
-## Le metriche
+## The metrics
 
-Tutte partono da `v_sets`, quindi correzioni e mappatura sono già applicate.
-Ogni assunzione è qui, non nascosta nel codice.
+Everything starts from `v_sets`, so corrections and mapping are already
+applied. Every assumption is written down here rather than buried in the code.
 
-| Metrica | Formula | Assunzioni e limiti |
+| Metric | Formula | Assumptions and limits |
 | --- | --- | --- |
-| **Tonnellaggio** | Σ (peso × reps) | Solo serie con `weight_mode = carico`. Se manca reps o peso la serie non contribuisce ed è contata a parte: `NULL`, mai zero |
-| **e1RM** | Epley: peso × (1 + reps / 30) | Stima lineare tarata sulle serie corte. Sopra le **12 reps** è marcata inaffidabile. A 1 rep la formula darebbe 1,033× il peso, quindi quel caso restituisce il peso |
-| **Densità** | tonnellaggio / tempo attivo | Tempo attivo = `session.total_timer_time`, l'unico che l'orologio dà |
-| **Lavoro/riposo** | Σ durata serie attive / Σ durata pause | Dai messaggi `set`. Le pause non registrate non vengono stimate |
-| **Deriva FC** | FC media ultimo terzo − primo terzo delle serie | Proxy grezzo di fatica: sale anche solo perché la seduta scalda. Servono ≥3 serie con FC, altrimenti `NULL` |
-| **Serie per gruppo** | conteggio serie attive per settimana ISO | Più robusta del tonnellaggio quando gli esercizi cambiano o il carico non è misurabile |
-| **Media mobile** | media 4 settimane sul volume | Calcolata **solo sulle settimane con dati**: una settimana senza allenamento non vale zero, altrimenti la media crollerebbe per finta |
+| **Tonnage** | Σ (weight × reps) | Only sets with `weight_mode = carico`. If reps or weight is missing the set doesn't contribute and is counted separately: `NULL`, never zero |
+| **e1RM** | Epley: weight × (1 + reps / 30) | A linear estimate calibrated on short sets. Above **12 reps** it is flagged unreliable. At 1 rep the formula would give 1.033× the weight, so that case returns the weight itself |
+| **Density** | tonnage / active time | Active time = `session.total_timer_time`, the only one the watch provides |
+| **Work/rest** | Σ active set duration / Σ rest duration | From the `set` messages. Unrecorded rests are not estimated |
+| **HR drift** | avg HR of the last third of sets − the first third | A crude fatigue proxy: it also rises simply because the session warms you up. Needs ≥3 sets with HR, otherwise `NULL` |
+| **Sets per group** | count of active sets per ISO week | More robust than tonnage when exercises change or load isn't measurable |
+| **Moving average** | 4-week mean of weekly volume | Computed **only over weeks that have data**: a week without training isn't worth zero, or the average would collapse for no reason |
 
-La FC per serie si ottiene incrociando i campioni a 1 Hz con la finestra
-temporale di ogni serie. Il confronto è su epoch e non su stringhe ISO: con i
-fusi orari il confronto testuale è inaffidabile.
+Per-set HR comes from intersecting the 1 Hz samples with each set's time
+window. The comparison runs on epoch numbers rather than ISO strings: with
+timezones, textual comparison is unreliable.
 
-### Non tutti i pesi sono carichi
+### Not every weight is a load
 
-`weight_mode` nella mappatura dice come leggere il peso registrato:
+`weight_mode` in the mapping says how to read the recorded weight:
 
-| Modo | Significato | Tonnellaggio | Carico effettivo |
+| Mode | Meaning | Tonnage | Effective load |
 | --- | --- | --- | --- |
-| `carico` (default) | il peso è il carico esterno | peso × reps | il peso |
-| `assistenza` | il peso è l'**aiuto** ricevuto | `NULL` | peso corporeo − assistenza |
-| `corpo_libero` | nessun carico esterno | `NULL` | peso corporeo |
+| `carico` (default) | the weight is external load | weight × reps | the weight |
+| `assistenza` | the weight is the **assistance** received | `NULL` | bodyweight − assistance |
+| `corpo_libero` | no external load | `NULL` | bodyweight |
 
-Alle trazioni assistite 40 kg indicano quanto la macchina ti *aiuta*:
-moltiplicarli per le ripetizioni darebbe un tonnellaggio non solo sbagliato ma
-rovesciato di segno, perché più assistenza significa serie più facile. Qui il
-progresso è l'assistenza che **cala**, ed è quello che la progressione mostra
-(`assistenza_minima_kg`, ed e1RM calcolato sul carico effettivo).
+On an assisted pull-up machine, 40 kg is how much the machine *helps* you.
+Multiplying it by reps would produce a tonnage that is not merely wrong but
+sign-inverted, since more assistance means an easier set. Here progress is
+assistance going **down**, and that is what the progression chart shows
+(`assistenza_minima_kg`, with e1RM computed on the effective load).
 
-Il peso corporeo viene letto dal messaggio `user_profile` del file stesso. Dove
-serve per una stima, la riga porta `carico_stimato = 1` e il tonnellaggio
-finisce in `volume_stimato_kg`, tenuto **fuori** dal totale: il numero di testa
-resta il carico esterno vero.
+Bodyweight is read from the file's own `user_profile` message. Where it feeds
+an estimate the row carries `carico_stimato = 1` and the tonnage goes to
+`volume_stimato_kg`, kept **out** of the headline total: the top-line number
+stays real external load.
 
-### Inserire a mano i carichi mancanti
+### Filling in missing loads by hand
 
-Quando i valori sono stati messi su Garmin Connect dopo la seduta, nel `.fit`
-non ci sono. Si trascrivono in un CSV numerando le serie **come le mostra
-Connect** (solo le attive, da 1):
+When values were entered in Garmin Connect after the session, they are not in
+the `.fit`. Transcribe them into a CSV, numbering sets **the way Connect shows
+them** (active sets only, from 1):
 
 ```csv
 data,seduta,serie,reps,peso_kg,nota
@@ -336,55 +338,54 @@ data,seduta,serie,reps,peso_kg,nota
 strength-tracker correct --from-csv examples/correzioni_day1_20260901.csv
 ```
 
-La colonna `seduta` serve solo quando in quel giorno c'è più di un
-allenamento. In `examples/` c'è la seduta "Day 1 Upper Body" del 01/09/2026
-già trascritta. Finiscono tutte in `corrections`: i dati grezzi restano
-intatti e `data_source` dice da dove viene ogni valore.
+The `seduta` column is only needed when there is more than one workout that
+day. `examples/` contains the "Day 1 Upper Body" session of 01/09/2026 already
+transcribed. They all land in `corrections`: raw data stays intact and
+`data_source` says where each value came from.
 
-## La dashboard
+## The dashboard
 
 ```bash
-strength-tracker report        # genera output/dashboard.html
-make session FIT=~/Downloads/palestra   # ingest + report in un colpo
+strength-tracker report                  # writes output/dashboard.html
+make session FIT=~/Downloads/palestra    # ingest + report in one go
 ```
 
-Un **unico file HTML** in `output/dashboard.html`: Chart.js è inserito inline
-dal repo e i dati sono un blocco JSON dentro la pagina. Zero richieste di rete,
-zero server — si apre con doppio click, anche in aereo. Nessun tag `src` o
-`href` verso l'esterno, e c'è un test che lo verifica.
+A **single HTML file** at `output/dashboard.html`: Chart.js is inlined from the
+repo and the data is a JSON block inside the page. Zero network requests, zero
+server — double-click it, works on a plane. No `src` or `href` tag points
+outward, and a test enforces that.
 
-Cosa contiene:
+What's in it:
 
-- **Riepilogo**: sedute, periodo, volume totale (con quante serie lo
-  sostengono), tempo sotto tensione, sedute nelle ultime 4 settimane.
-- **Volume settimanale** con media mobile a 4 settimane.
-- **Carico per gruppo muscolare** a settimana, barre impilate, con selettore
-  serie / tonnellaggio: le serie restano leggibili anche dove il carico non è
-  misurabile.
-- **Gruppi sotto osservazione** (hamstring, adduttori, glutei): ci sono sempre
-  tutti e tre, e se un gruppo non è stato allenato la pagina lo **scrive**
-  invece di mostrare un grafico vuoto.
-- **Progressione per esercizio** con selettore: peso migliore ed e1RM sullo
-  stesso asse (sono entrambi kg), ripetizioni totali in un grafico a parte —
-  mai due scale sullo stesso grafico. Per le trazioni assistite mostra
-  l'assistenza al posto del peso, e lo dice.
-- **Ultime sedute** espandibili serie per serie: numerazione identica a quella
-  di Garmin Connect, FC media della singola serie, e un tag che dice se il
-  valore viene dal file o da una correzione.
-- **Anomalie**: esercizi non mappati, serie con peso zero, ripetizioni
-  sospette, serie di durata anomala, sedute senza ripetizioni. Ognuna con una
-  riga che spiega cosa farci.
-- **Note di metodo** in fondo: le assunzioni di ogni formula, sulla pagina e
-  non solo qui.
+- **Summary**: sessions, period covered, total volume (and how many sets back
+  it up), time under tension, sessions in the last 4 weeks.
+- **Weekly volume** with a 4-week moving average.
+- **Load per muscle group** by week, stacked bars, with a sets / tonnage
+  toggle: sets stay readable even where load isn't measurable.
+- **Groups under watch** (hamstrings, adductors, glutes): all three are always
+  present, and if a group wasn't trained the page **says so** instead of
+  showing an empty chart.
+- **Per-exercise progression** with a selector: best weight and e1RM on the
+  same axis (both are kg), total reps in a separate chart — never two scales on
+  one plot. For assisted pull-ups it shows assistance instead of weight, and
+  says why.
+- **Recent sessions**, expandable set by set: numbering identical to Garmin
+  Connect's, per-set average HR, and a tag saying whether each value came from
+  the file or from a correction.
+- **Anomalies**: unmapped exercises, zero-weight sets, suspicious rep counts,
+  abnormally long sets, sessions with no reps at all. Each with a line
+  explaining what to do about it.
+- **Method notes** at the bottom: every formula's assumptions, on the page
+  itself rather than only here.
 
-Dettagli di resa: tema chiaro e scuro (segue il sistema, con interruttore in
-alto a destra), palette categorica a 8 slot in ordine fisso — l'ordine è quello
-che la rende leggibile ai daltonismi, non una scelta estetica — e oltre l'ottavo
-gruppo i più piccoli confluiscono in "altri", che dichiara cosa contiene. Ogni
-grafico ha la sua tabella, e le stime poco affidabili (e1RM oltre le 12
-ripetizioni) cambiano **forma** del punto, non solo colore.
+Rendering details: light and dark themes (following the system, with a toggle
+top right); an eight-slot categorical palette in fixed order — the order is
+what keeps it readable under colour blindness, not an aesthetic choice — and
+past the eighth group the smallest ones fold into "altri", which declares what
+it contains. Every chart has a table view, and unreliable estimates (e1RM above
+12 reps) change the point's **shape**, not just its colour.
 
-## Installazione senza uv
+## Installing without uv
 
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
@@ -392,84 +393,81 @@ pip install -r requirements-dev.txt -e .
 strength-tracker --help
 ```
 
-Con questa strada i comandi si lanciano come `strength-tracker ...` invece di
-`uv run strength-tracker ...` (e il `Makefile` va adattato di conseguenza).
+Going this route, commands are run as `strength-tracker ...` instead of
+`uv run strength-tracker ...` (and the `Makefile` needs adjusting to match).
 
-## Tutti i comandi
+## All commands
 
 ```bash
-strength-tracker ingest <path>          # file singolo o cartella, ricorsivo
-strength-tracker ingest <path> --force  # rilegge anche i file già processati
-strength-tracker inspect <file.fit>     # dump JSON dei messaggi grezzi (--raw per gli unknown_*)
-strength-tracker unmapped               # esercizi non ancora mappati
-strength-tracker unmapped --yaml        # le voci già pronte da incollare nel YAML
+strength-tracker ingest <path>          # single file or directory, recursive
+strength-tracker ingest <path> --force  # re-read files already processed
+strength-tracker inspect <file.fit>     # JSON dump of raw messages (--raw for unknown_*)
+strength-tracker unmapped               # exercises not yet mapped
+strength-tracker unmapped --yaml        # entries ready to paste into the YAML
 strength-tracker correct <set_id> --reps N --weight K [--exercise RAW_KEY] [--note "..."]
-strength-tracker correct --from-csv <file.csv>   # correzioni in blocco
-strength-tracker report                 # genera output/dashboard.html
-strength-tracker stats                  # riepilogo testuale nel terminale
+strength-tracker correct --from-csv <file.csv>   # bulk corrections
+strength-tracker report                 # writes output/dashboard.html
+strength-tracker stats                  # quick textual summary in the terminal
 ```
 
-Il flusso normale del dopo-allenamento e' `ingest` seguito da `report`,
-concatenati da:
+The normal post-workout flow is `ingest` then `report`, chained by:
 
 ```bash
 make session FIT=~/Downloads/palestra
 ```
 
-### Percorsi di default
+### Default paths
 
-Sono relativi alla directory da cui lanci il comando (la root del progetto) e
-sovrascrivibili:
+Relative to the directory you run the command from (the project root), and
+overridable:
 
-| Cosa | Default | Variabile d'ambiente | Flag |
+| What | Default | Environment variable | Flag |
 | --- | --- | --- | --- |
 | Database | `data/strength.db` | `STRENGTH_TRACKER_DB` | `--db` |
-| Mappatura | `config/exercise_mapping.yaml` | `STRENGTH_TRACKER_MAPPING` | `--mapping` |
+| Mapping | `config/exercise_mapping.yaml` | `STRENGTH_TRACKER_MAPPING` | `--mapping` |
 | Dashboard | `output/dashboard.html` | `STRENGTH_TRACKER_OUTPUT` | `--output` |
 
-## Struttura
+## Layout
 
 ```
 .
-├── config/exercise_mapping.yaml   # mappatura versionata, editabile a mano
+├── config/exercise_mapping.yaml   # versioned mapping, hand-editable
 ├── src/strength_tracker/          # fit_parser, db, ingest, mapping, metrics, dashboard, cli
 ├── templates/dashboard.html.j2
-├── vendor/chart.min.js            # Chart.js 4.4.4 UMD, MIT — inlineato nella dashboard
+├── vendor/chart.min.js            # Chart.js 4.4.4 UMD, MIT — inlined into the dashboard
 └── tests/
-    ├── fitgen.py                  # encoder FIT minimale: genera le fixture binarie
-    └── fixtures/*.fit             # FIT sintetici versionati (nessun dato personale)
+    ├── fitgen.py                  # minimal FIT encoder: generates the binary fixtures
+    └── fixtures/*.fit             # versioned synthetic FIT files (no personal data)
 ```
 
-I test girano su file `.fit` binari veri prodotti da `tests/fitgen.py` e letti
-dallo stesso `fitdecode` usato in produzione: nessun mock. Per rigenerarli:
+Tests run against real binary `.fit` files produced by `tests/fitgen.py` and
+read by the same `fitdecode` used in production: no mocks. To regenerate them:
 
 ```bash
 uv run python tests/fitgen.py
 ```
 
-## Scelte tecniche
+## Technical choices
 
-- **Dipendenze minime**: `fitdecode` (parsing FIT), `PyYAML` (mappatura),
-  `Jinja2` (template della dashboard). Niente pandas: i volumi di dati sono
-  quelli di 2-3 sedute a settimana, SQL e la stdlib bastano e avanzano.
-- **SQLite via `sqlite3`**, nessun ORM. Le metriche vivono in viste SQL dove
-  possibile, cosi' sono ispezionabili con qualsiasi client.
-- **Chart.js vendorizzato** in `vendor/` e inserito inline nell'HTML: la
-  dashboard e' un unico file che si apre con doppio click, anche offline.
-- **Correzioni non distruttive**: gli override manuali stanno in una tabella
-  `corrections` e vengono applicati sopra i dati grezzi in lettura, mai
-  sovrascrivendoli.
-- **Niente dati inventati**: se un campo manca resta `NULL` e la dashboard lo
-  dichiara, invece di mostrare uno zero.
-- **Estendibile alla corsa**: lo schema tiene le sedute di forza in tabelle
-  proprie e i raccordi temporali (settimana ISO) come chiavi di
-  aggregazione, cosi' aggiungere in seguito una tabella di attivita' di corsa
-  non richiede di rifare il database.
+- **Minimal dependencies**: `fitdecode` (FIT parsing), `PyYAML` (mapping),
+  `Jinja2` (dashboard template). No pandas: the data volumes are those of two
+  or three sessions a week, and SQL plus the stdlib are more than enough.
+- **SQLite via `sqlite3`**, no ORM. Metrics live in SQL views where possible,
+  so they're inspectable from any client.
+- **Chart.js vendored** into `vendor/` and inlined into the HTML: the dashboard
+  is a single file you can double-click, offline included.
+- **Non-destructive corrections**: manual overrides live in a `corrections`
+  table and are applied over the raw data at read time, never overwriting it.
+- **No invented data**: a missing field stays `NULL` and the dashboard declares
+  it, rather than showing a zero.
+- **Extensible to running**: the schema keeps strength sessions in a generic
+  activity table with ISO-week aggregation keys, so adding running activities
+  later won't require rebuilding the database.
 
-Le assunzioni di ogni formula (Epley, densita', deriva FC) sono documentate qui
-alla Fase 4.
+Every formula's assumptions (Epley, density, HR drift) are documented under
+[The metrics](#the-metrics).
 
 ## Privacy
 
-`.gitignore` esclude `data/`, `output/`, `*.fit` e `*.db`. Fanno eccezione le
-fixture di test, che sono file sintetici o anonimizzati.
+`.gitignore` excludes `data/`, `output/`, `*.fit` and `*.db`. The exception is
+the test fixtures, which are synthetic files carrying no personal data.
