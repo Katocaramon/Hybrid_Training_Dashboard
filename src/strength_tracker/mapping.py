@@ -23,11 +23,33 @@ class MappingError(Exception):
 
 
 @dataclass(frozen=True)
+class Match:
+    """Un criterio di riconoscimento: chiave grezza, con nota opzionale.
+
+    La nota e' quella dello step dell'allenamento (`workout_step.notes`).
+    Serve quando la stessa chiave grezza vuol dire esercizi diversi: il
+    Copenhagen plank arriva come `plank/side_plank` con nota "Copenhagen
+    plank", un plank laterale vero arriva con la stessa chiave e nessuna nota.
+    """
+
+    raw_key: str
+    note: str = ""
+
+    @property
+    def key(self) -> tuple[str, str]:
+        return (self.raw_key, self.note)
+
+
+@dataclass(frozen=True)
 class ExerciseMapping:
     name: str
     primary_group: str | None
     secondary_groups: tuple[str, ...]
-    raw_keys: tuple[str, ...]
+    matches: tuple[Match, ...]
+
+    @property
+    def raw_keys(self) -> tuple[str, ...]:
+        return tuple(m.raw_key for m in self.matches)
 
 
 @dataclass(frozen=True)
@@ -37,23 +59,25 @@ class Mapping:
     source_path: Path
 
     @property
+    def by_match(self) -> dict[tuple[str, str], ExerciseMapping]:
+        return {m.key: ex for ex in self.exercises for m in ex.matches}
+
+    @property
     def by_raw_key(self) -> dict[str, ExerciseMapping]:
-        out: dict[str, ExerciseMapping] = {}
-        for ex in self.exercises:
-            for key in ex.raw_keys:
-                out[key] = ex
-        return out
+        """Solo le voci generiche (senza nota): comode da interrogare."""
+        return {m.raw_key: ex for ex in self.exercises for m in ex.matches if not m.note}
 
     def as_rows(self) -> list[dict[str, Any]]:
         """Righe pronte per `db.refresh_exercise_map`."""
         return [
             {
-                "raw_key": key,
+                "raw_key": match.raw_key,
+                "note": match.note,
                 "exercise_name": ex.name,
                 "primary_group": ex.primary_group,
                 "secondary_groups": list(ex.secondary_groups),
             }
-            for key, ex in self.by_raw_key.items()
+            for match, ex in ((m, ex) for ex in self.exercises for m in ex.matches)
         ]
 
 
@@ -73,24 +97,34 @@ def load_mapping(path: Path) -> Mapping:
         raise MappingError(f"{path}: il file deve contenere una mappa, non {type(data).__name__}")
 
     exercises: list[ExerciseMapping] = []
-    visto: dict[str, str] = {}
+    visto: dict[tuple[str, str], str] = {}
     for i, raw in enumerate(data.get("exercises") or []):
         if not isinstance(raw, dict):
             raise MappingError(f"{path}: voce #{i + 1} di 'exercises' non e' una mappa")
         name = raw.get("name")
         if not name:
             raise MappingError(f"{path}: voce #{i + 1} senza 'name'")
-        keys = raw.get("match") or []
-        if isinstance(keys, str):
-            keys = [keys]
-        for key in keys:
-            key = str(key)
-            if key in visto:
+        voci = raw.get("match") or []
+        if isinstance(voci, (str, dict)):
+            voci = [voci]
+        matches: list[Match] = []
+        for voce in voci:
+            if isinstance(voce, dict):
+                if "key" not in voce:
+                    raise MappingError(
+                        f"{path}: voce di 'match' di {name!r} senza 'key'"
+                    )
+                match = Match(str(voce["key"]), str(voce.get("note") or "").strip().lower())
+            else:
+                match = Match(str(voce))
+            if match.key in visto:
+                etichetta = match.raw_key + (f" (nota: {match.note})" if match.note else "")
                 raise MappingError(
-                    f"{path}: la chiave grezza {key!r} e' assegnata sia a "
-                    f"{visto[key]!r} sia a {name!r}"
+                    f"{path}: la chiave grezza {etichetta!r} e' assegnata sia a "
+                    f"{visto[match.key]!r} sia a {name!r}"
                 )
-            visto[key] = name
+            visto[match.key] = name
+            matches.append(match)
         secondary = raw.get("secondary") or []
         if isinstance(secondary, str):
             secondary = [secondary]
@@ -99,7 +133,7 @@ def load_mapping(path: Path) -> Mapping:
                 name=str(name),
                 primary_group=raw.get("primary"),
                 secondary_groups=tuple(str(s) for s in secondary),
-                raw_keys=tuple(str(k) for k in keys),
+                matches=tuple(matches),
             )
         )
 

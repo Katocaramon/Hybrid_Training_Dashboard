@@ -280,3 +280,29 @@ def test_dump_json_regge_tipi_inattesi():
     assert _jsonable(timedelta(seconds=90)) == 90.0
     assert _jsonable((1, None, "x")) == [1, None, "x"]
     assert json.dumps(_jsonable(object())) is not None
+
+
+# --- note degli step (esercizi fuori catalogo) -----------------------------
+
+
+def test_nota_dello_step_letta(activity):
+    passo = next(w for w in activity.workout_steps if w.note)
+    assert passo.note == "Copenhagen plank"
+    assert passo.exercise_key == "plank/side_plank"
+
+
+def test_la_nota_arriva_fino_alla_serie(activity):
+    # Il Copenhagen plank non esiste nel catalogo Garmin: arriva come plank
+    # laterale, e solo la nota dello step lo distingue.
+    plank = next(s for s in activity.active_sets if s.exercise_key == "plank/side_plank")
+    assert plank.step_note == "Copenhagen plank"
+
+
+def test_serie_senza_passo_non_hanno_nota(activity):
+    pull = next(s for s in activity.active_sets if s.exercise_key.startswith("pull_up/"))
+    assert pull.wkt_step_index is None and pull.step_note is None
+
+
+def test_note_degli_step_nel_dump(activity):
+    dati = fp.inspect_file(STRENGTH)
+    assert dati["summary"]["step_notes"] == ["Copenhagen plank"]

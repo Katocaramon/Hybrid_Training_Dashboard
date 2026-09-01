@@ -56,10 +56,19 @@ cambia le carte in tavola.
   tabella `(categoria, nome) -> etichetta` ("Band-assisted Pull-up"): la
   usiamo come etichetta leggibile quando c'e'.
 - **`workout_step` (msg 27)** — se la seduta segue un allenamento
-  strutturato, `set.wkt_step_index` punta qui e da' ripetizioni
+  strutturato, `set.wkt_step_index` punta qui e dà ripetizioni
   (`duration_reps`) e peso (`exercise_weight`, scala **100**, non 16)
   **pianificati**. Sono valori pianificati, non eseguiti: restano in colonne
   separate e non entrano mai nel volume.
+- **`workout_step.notes` porta il nome vero degli esercizi fuori catalogo.**
+  Il Copenhagen plank nel catalogo Garmin non esiste: viene registrato come
+  `plank/side_plank`, e a distinguerlo da un plank laterale vero è solo la
+  nota dello step, "Copenhagen plank". La stessa chiave grezza può quindi
+  voler dire due esercizi diversi in due sedute diverse, e la mappatura sa
+  qualificarci sopra (vedi sotto).
+- Le etichette di `exercise_title` sono **nella lingua dell'orologio**
+  ("Stacco con Trap-bar"). Lo slug del catalogo resta invece stabile e in
+  inglese: è quello la chiave di mappatura, l'etichetta è solo per leggere.
 - **`record` (msg 20)** — frequenza cardiaca a 1 Hz per tutta la seduta
   (~4300 campioni per 70 minuti).
 - **`session` (msg 18)** — `total_timer_time` e' il tempo attivo (non esiste
@@ -145,24 +154,48 @@ dettaglio (distanza, passo, dislivello) con FK su `sessions(id)`. Nessuna
 migrazione distruttiva, e l'incrocio settimanale palestra/corsa diventa una
 join su `(iso_year, iso_week)`.
 
-### Reps e carichi mancanti nell'export Garmin
+### Reps e carichi: quando ci sono e quando no
 
 Garmin Connect esporta i `.fit` solo come **"Export Original"**: il file
 originale caricato dall'orologio. Le modifiche fatte dopo dall'app (reps,
 carichi, correzioni) restano nel database di Connect e **non finiscono mai nel
-FIT esportato**. Se una seduta è stata seguita come allenamento strutturato e
-i valori non sono stati confermati sull'orologio, `repetitions` e `weight`
-arrivano vuoti: volume, tonnellaggio ed e1RM non sono calcolabili e restano
-`NULL`.
+FIT esportato**.
 
-Due strade, non alternative:
+Confermato su due sedute reali:
 
-- confermare reps e peso **sull'orologio** a fine serie, così entrano nel file;
-- inserirli a posteriori con `strength-tracker correct <set_id> --reps N
-  --weight K`, che li scrive in `corrections` senza toccare i dati grezzi.
+| Seduta | `repetitions` | `weight` |
+| --- | --- | --- |
+| 01/09 "Day 1 Upper Body", valori inseriti dopo sul telefono | assenti su 35 serie | assenti |
+| 01/09 "Day 2 Legs", valori confermati sull'orologio | presenti su 14 serie su 15 | presenti dove il carico c'era |
+
+Quindi i dati arrivano, ma **solo se confermati sull'orologio durante la
+seduta**. Dove mancano, `volume_kg` resta `NULL`: si inseriscono a posteriori
+con `strength-tracker correct <set_id> --reps N --weight K`, che li scrive in
+`corrections` senza toccare i dati grezzi.
 
 Le metriche che non dipendono dal carico — serie per gruppo muscolare, tempo
 sotto tensione, densità della seduta, deriva della FC — funzionano comunque.
+
+### Quando la stessa chiave grezza vuol dire due esercizi
+
+Il Copenhagen plank arriva come `plank/side_plank`, esattamente come un plank
+laterale vero. A distinguerli è la nota dello step dell'allenamento. La
+mappatura può quindi qualificare una chiave:
+
+```yaml
+  - name: Copenhagen plank
+    primary: adduttori
+    match:
+      - key: plank/side_plank
+        note: Copenhagen plank      # vince sulla voce generica
+
+  - name: Side plank
+    primary: core
+    match: [plank/side_plank]       # senza nota: plank laterale vero
+```
+
+`v_sets` fa due join sulla mappatura e la voce qualificata dalla nota ha la
+precedenza. Il confronto è case-insensitive e ignora gli spazi ai bordi.
 
 ## Installazione
 

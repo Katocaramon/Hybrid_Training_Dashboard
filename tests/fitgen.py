@@ -178,6 +178,15 @@ def _set(
     )
 
 
+def _step_index(category: int, subcategory: int) -> int | None:
+    """Collega la serie al passo dell'allenamento strutturato, se c'e'."""
+    if (category, subcategory) == (8, 0):
+        return 0  # trap bar deadlift pianificato
+    if (category, subcategory) == (19, 66):
+        return 1  # plank laterale con nota "Copenhagen plank"
+    return None
+
+
 def build_strength_fit(
     path: Path,
     *,
@@ -226,6 +235,22 @@ def build_strength_fit(
         ],
     )
 
+    # Secondo passo: stesso esercizio del catalogo (plank laterale) ma con la
+    # nota che dice cos'e' davvero. E' cosi' che Garmin registra un Copenhagen
+    # plank, che nel suo catalogo non esiste.
+    w.message(
+        MSG_WORKOUT_STEP,
+        [
+            (254, "uint16", 1),
+            (1, "enum", 0),  # duration_type = time
+            (2, "uint32", 45000),
+            (7, "enum", 0),  # intensity = active
+            (8, "string", "Copenhagen plank"),  # notes
+            (10, "uint16", 19),  # exercise_category = plank
+            (11, "uint16", 66),  # exercise_name = side_plank
+        ],
+    )
+
     plan = [
         # (categoria, sottocategoria, reps, peso kg, durata attiva, riposo)
         ((8, 8, 8), (0, 0, 0), 8, 60.0, 42.0, 120.0),
@@ -252,7 +277,7 @@ def build_strength_fit(
             subcategory=sub,
             reps=reps,
             weight_kg=weight,
-            wkt_step_index=0 if cat[0] == 8 and sub[0] == 0 else None,
+            wkt_step_index=_step_index(cat[0], sub[0]),
         )
         index += 1
         t += timedelta(seconds=active_s)

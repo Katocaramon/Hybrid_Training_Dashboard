@@ -24,6 +24,12 @@ Connect `<id>_ACTIVITY.fit`) — verificata su file reali, non assunta:
 * `set.wkt_step_index` punta a `workout_step.message_index`: da li' si leggono
   le ripetizioni e il peso *pianificati* dall'allenamento strutturato. Sono
   valori pianificati, non eseguiti, e restano separati da quelli reali.
+* **`workout_step.notes` porta il nome vero degli esercizi fuori catalogo.**
+  Un Copenhagen plank viene registrato come `plank/side_plank` (il catalogo
+  Garmin non ne ha uno suo) ma lo step dell'allenamento porta la nota
+  "Copenhagen plank". La stessa chiave grezza puo' quindi voler dire due
+  esercizi diversi in due sedute diverse: la nota e' l'unica cosa che li
+  distingue, e la mappatura sa qualificarci sopra.
 * Non esiste un campo `activity_id` dentro il FIT: l'id numerico di Garmin
   Connect sta solo nel nome del file esportato.
 * `session.total_timer_time` e' il tempo attivo; non c'e' un campo dedicato.
@@ -76,6 +82,7 @@ class WorkoutStep:
     planned_weight_kg: float | None
     duration_type: str | None
     intensity: str | None
+    note: str | None
 
 
 @dataclass(frozen=True)
@@ -96,6 +103,7 @@ class SetRecord:
     wkt_step_index: int | None
     planned_reps: int | None = None
     planned_weight_kg: float | None = None
+    step_note: str | None = None
 
     @property
     def is_active(self) -> bool:
@@ -330,6 +338,7 @@ def parse_file(path: Path) -> ParsedActivity:
                         planned_weight_kg=_val(d, "exercise_weight"),
                         duration_type=_val(d, "duration_type"),
                         intensity=_val(d, "intensity"),
+                        note=_val(d, "notes"),
                     )
             elif name == "session" and session_fields is None:
                 session_fields = _fields(frame)
@@ -448,6 +457,7 @@ def _build_set(
         wkt_step_index=int(step_index) if step_index is not None else None,
         planned_reps=step.planned_reps if step else None,
         planned_weight_kg=step.planned_weight_kg if step else None,
+        step_note=step.note if step else None,
     )
 
 
@@ -570,6 +580,7 @@ def inspect_file(
             "planned_weight_kg": s.planned_weight_kg,
             "duration_type": s.duration_type,
             "intensity": s.intensity,
+            "note": s.note,
         }
         for s in act.workout_steps
     ]
@@ -589,6 +600,7 @@ def inspect_file(
             "wkt_step_index": s.wkt_step_index,
             "planned_reps": s.planned_reps,
             "planned_weight_kg": s.planned_weight_kg,
+            "step_note": s.step_note,
             "volume_kg": s.volume_kg,
         }
         for s in act.sets
@@ -622,6 +634,7 @@ def inspect_file(
         "sets_with_weight": sum(1 for s in active if s.weight_kg is not None),
         "distinct_exercises": sorted({s.exercise_key for s in active if s.exercise_key}),
         "sets_without_exercise": sum(1 for s in active if s.exercise_key is None),
+        "step_notes": sorted({s.step_note for s in active if s.step_note}),
     }
     out["warnings"] = act.warnings
     if raw_messages:

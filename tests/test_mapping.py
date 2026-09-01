@@ -30,7 +30,7 @@ def test_i_sette_esercizi_del_programma_ci_sono():
     nomi = {e.name for e in load_mapping(REALE).exercises}
     for atteso in [
         "Trap bar deadlift",
-        "Dumbbell romanian deadlift",
+        "Romanian deadlift",  # bilanciere o manubri: una voce sola
         "Bulgarian split squat",
         "Step-up",
         "Copenhagen plank",

@@ -26,22 +26,28 @@ exercises:
   - name: Trap bar deadlift
     primary: catena_posteriore
     secondary: [glutei, hamstring, quadricipiti]
+    # confermato: seduta "Day 2 Legs" del 01/09/2026, 58 kg x 5
     match:
       - deadlift/trap_bar_deadlift
       # se sull'orologio scegli il deadlift generico finisce qui:
       - deadlift/barbell_deadlift
 
-  - name: Dumbbell romanian deadlift
+  - name: Romanian deadlift
     primary: hamstring
     secondary: [glutei, catena_posteriore]
+    # Nel programma "Day 2 Legs" e' `deadlift/romanian_deadlift`, che
+    # l'orologio etichetta "Stacco da terra (bilanciere)". Tengo un unico
+    # esercizio: se un giorno vuoi separare bilanciere e manubri, basta
+    # spezzare questa voce in due.
     match:
-      - deadlift/dumbbell_straight_leg_deadlift
       - deadlift/romanian_deadlift
+      - deadlift/dumbbell_straight_leg_deadlift
       - deadlift/dumbbell_deadlift
 
   - name: Bulgarian split squat
     primary: quadricipiti
     secondary: [glutei]
+    # confermato: e' nel programma "Day 2 Legs" (8 reps x 10 kg per lato)
     match:
       - lunge/dumbbell_bulgarian_split_squat
       - lunge/barbell_bulgarian_split_squat
@@ -60,11 +66,14 @@ exercises:
   - name: Copenhagen plank
     primary: adduttori
     secondary: [core]
-    # Verificato sul catalogo FIT: il Copenhagen plank NON esiste. Arrivera'
-    # come qualunque voce tu scelga sull'orologio (un plank generico, o
-    # un'adduzione). Lancia `unmapped` dopo la prima seduta che lo contiene e
-    # incolla qui la chiave che compare.
+    # Il Copenhagen plank non esiste nel catalogo Garmin. Nel programma
+    # "Day 2 Legs" e' registrato come plank laterale, e a distinguerlo da un
+    # plank laterale vero e' solo la nota dello step: "Copenhagen plank".
+    # La mappatura qualificata dalla nota vince su quella generica.
     match:
+      - key: plank/side_plank
+        note: Copenhagen plank
+      # se un giorno lo registri come adduzione:
       - hip_stability/standing_adduction
       - hip_stability/sliding_hip_adduction
       - banded_exercises/leg_adduction
@@ -85,6 +94,58 @@ exercises:
       - shoulder_press/overhead_barbell_press
       - shoulder_press/overhead_dumbbell_press
       - shoulder_press/barbell_shoulder_press
+
+  # ---- resto del programma "Day 2 Legs" ------------------------------------
+
+  - name: Ponte per glutei con elastico
+    primary: glutei
+    secondary: [catena_posteriore]
+    match: [banded_exercises/glute_bridge]
+
+  - name: Passi laterali con elastico
+    primary: glutei
+    secondary: [abduttori]
+    match: [banded_exercises/lateral_band_walks]
+
+  - name: Clamshell con elastico
+    primary: glutei
+    secondary: [abduttori]
+    match: [banded_exercises/clam_shells]
+
+  - name: Affondo
+    primary: quadricipiti
+    secondary: [glutei]
+    match: [lunge/lunge]
+
+  - name: Hip thrust
+    primary: glutei
+    secondary: [hamstring]
+    match:
+      - hip_raise/barbell_hip_thrust_with_bench
+      - hip_raise/barbell_hip_thrust_on_floor
+
+  - name: Leg curl
+    primary: hamstring
+    secondary: []
+    # sul programma: "Leg Curl alternato a Nordic curl"
+    match:
+      - leg_curl/weighted_leg_curl
+      - leg_curl/leg_curl
+
+  - name: Abduzione anca
+    primary: abduttori
+    secondary: [glutei]
+    # sul programma: "Hip Abductor Machine"
+    match:
+      - hip_stability/weighted_standing_hip_abduction
+      - hip_stability/standing_hip_abduction
+
+  - name: Calf raise su una gamba
+    primary: polpacci
+    secondary: []
+    match:
+      - calf_raise/single_leg_standing_calf_raise
+      - calf_raise/standing_calf_raise
 
   # ---- altri esercizi gia' visti nelle sedute ------------------------------
   # Presi dalla seduta "Day 1 Upper Body" del 01/09/2026.
@@ -137,6 +198,8 @@ exercises:
   - name: Side plank
     primary: core
     secondary: [adduttori]
+    # senza nota: plank laterale vero. Con nota "Copenhagen plank" vince
+    # invece la voce qualificata piu' sopra.
     match: [plank/side_plank]
 
   - name: Cardio

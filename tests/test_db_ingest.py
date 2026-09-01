@@ -49,7 +49,10 @@ def test_schema_creato_e_migrazione_idempotente(conn):
     viste = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='view'")}
     assert {"v_sets", "v_corrections_effective"} <= viste
     assert db.migrate(conn) == db.SCHEMA_VERSION  # richiamabile a ogni avvio
-    assert conn.execute("SELECT COUNT(*) c FROM schema_migrations").fetchone()["c"] == 1
+    assert (
+        conn.execute("SELECT COUNT(*) c FROM schema_migrations").fetchone()["c"]
+        == db.SCHEMA_VERSION
+    )
 
 
 def test_cancellare_una_seduta_pulisce_serie_e_fc(conn, cartella):
@@ -364,3 +367,116 @@ def test_cli_mappatura_non_valida(tmp_path, cartella, capsys):
         main(["--db", str(tmp_path / "x.db"), "ingest", str(cartella), "--mapping", str(cattiva)])
     assert exc.value.code == 2
     assert "mappatura non valida" in capsys.readouterr().err
+
+
+# --- mappatura qualificata dalla nota dello step ---------------------------
+
+
+def test_la_nota_dello_step_finisce_nel_database(conn, cartella):
+    ingest_path(conn, cartella)
+    r = conn.execute(
+        "SELECT wkt_step_note FROM v_sets WHERE raw_exercise_key = 'plank/side_plank'"
+    ).fetchone()
+    assert r["wkt_step_note"] == "Copenhagen plank"
+
+
+def test_la_nota_qualifica_la_mappatura(conn, cartella):
+    """La stessa chiave grezza, due esercizi diversi: decide la nota."""
+    ingest_path(conn, cartella)
+    db.refresh_exercise_map(
+        conn,
+        [
+            {
+                "raw_key": "plank/side_plank",
+                "note": "",
+                "exercise_name": "Side plank",
+                "primary_group": "core",
+                "secondary_groups": [],
+            },
+            {
+                "raw_key": "plank/side_plank",
+                "note": "Copenhagen plank",
+                "exercise_name": "Copenhagen plank",
+                "primary_group": "adduttori",
+                "secondary_groups": ["core"],
+            },
+        ],
+    )
+    r = conn.execute(
+        "SELECT * FROM v_sets WHERE raw_exercise_key = 'plank/side_plank'"
+    ).fetchone()
+    assert r["exercise_name"] == "Copenhagen plank"
+    assert r["muscle_group"] == "adduttori"
+    assert r["unmapped"] == 0
+
+
+def test_senza_nota_vince_la_voce_generica(conn, cartella):
+    ingest_path(conn, cartella)
+    conn.execute("UPDATE sets SET wkt_step_note = NULL")
+    conn.commit()
+    db.refresh_exercise_map(
+        conn,
+        [
+            {"raw_key": "plank/side_plank", "note": "", "exercise_name": "Side plank",
+             "primary_group": "core", "secondary_groups": []},
+            {"raw_key": "plank/side_plank", "note": "Copenhagen plank",
+             "exercise_name": "Copenhagen plank", "primary_group": "adduttori",
+             "secondary_groups": []},
+        ],
+    )
+    r = conn.execute(
+        "SELECT * FROM v_sets WHERE raw_exercise_key = 'plank/side_plank'"
+    ).fetchone()
+    assert r["exercise_name"] == "Side plank" and r["muscle_group"] == "core"
+
+
+def test_la_mappatura_del_repo_riconosce_il_copenhagen(conn, cartella):
+    ingest_path(conn, cartella)
+    db.refresh_exercise_map(conn, load_mapping("config/exercise_mapping.yaml").as_rows())
+    r = conn.execute(
+        "SELECT * FROM v_sets WHERE raw_exercise_key = 'plank/side_plank'"
+    ).fetchone()
+    assert r["exercise_name"] == "Copenhagen plank"
+    assert r["muscle_group"] == "adduttori"
+
+
+def test_unmapped_distingue_le_note(conn, cartella):
+    ingest_path(conn, cartella)
+    db.refresh_exercise_map(conn, [])
+    righe = {(r["raw_key"], r["note"]) for r in db.unmapped_raw_keys(conn)}
+    assert ("plank/side_plank", "Copenhagen plank") in righe
+
+
+def test_migrazioni_applicate_in_ordine(tmp_path):
+    conn = db.connect(tmp_path / "m.db")
+    versioni = [r["version"] for r in conn.execute("SELECT version FROM schema_migrations ORDER BY version")]
+    assert versioni == list(range(1, db.SCHEMA_VERSION + 1))
+    # riaprire il database non riapplica nulla
+    conn.close()
+    conn = db.connect(tmp_path / "m.db")
+    assert conn.execute("SELECT COUNT(*) c FROM schema_migrations").fetchone()["c"] == db.SCHEMA_VERSION
+
+
+def test_database_v1_migra_senza_perdere_dati(tmp_path, cartella):
+    """Un database creato prima della migrazione 2 si aggiorna sul posto."""
+    percorso = tmp_path / "vecchio.db"
+    conn = db.connect(percorso)
+    ingest_path(conn, cartella)
+    sid = conn.execute("SELECT id FROM sets WHERE set_index = 0").fetchone()["id"]
+    db.add_correction(conn, sid, reps=10)
+    # si simula un database fermo alla versione 1
+    conn.execute("DELETE FROM schema_migrations WHERE version = 2")
+    conn.execute("DROP VIEW v_sets")  # la vista v1 non conosceva la colonna
+    conn.execute("ALTER TABLE sets DROP COLUMN wkt_step_note")
+    conn.execute("DROP TABLE exercise_map")
+    conn.execute(
+        "CREATE TABLE exercise_map (raw_key TEXT PRIMARY KEY, exercise_name TEXT NOT NULL,"
+        " primary_group TEXT, secondary_groups TEXT, updated_at TEXT NOT NULL)"
+    )
+    conn.commit()
+    conn.close()
+
+    conn = db.connect(percorso)  # la riapertura deve migrare
+    assert "wkt_step_note" in {r[1] for r in conn.execute("PRAGMA table_info(sets)")}
+    assert conn.execute("SELECT COUNT(*) c FROM sets").fetchone()["c"] == 14
+    assert conn.execute("SELECT reps FROM v_sets WHERE set_id = ?", (sid,)).fetchone()["reps"] == 10

@@ -39,9 +39,10 @@ from typing import Any, Iterable
 
 from .fit_parser import ParsedActivity
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
-_SCHEMA = """
+# Migrazione 1: schema iniziale.
+_MIGRATION_1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version     INTEGER PRIMARY KEY,
     applied_at  TEXT NOT NULL
@@ -145,6 +146,28 @@ CREATE TABLE IF NOT EXISTS ingested_files (
 );
 """
 
+# Migrazione 2: la nota dello step dell'allenamento.
+# Serve perche' la stessa chiave grezza puo' voler dire esercizi diversi:
+# un Copenhagen plank arriva come `plank/side_plank` (il catalogo Garmin non
+# ne ha uno suo) e solo la nota "Copenhagen plank" lo distingue da un plank
+# laterale vero. La mappatura puo' quindi qualificare una chiave con la nota.
+_MIGRATION_2 = """
+ALTER TABLE sets ADD COLUMN wkt_step_note TEXT;
+
+DROP TABLE IF EXISTS exercise_map;
+CREATE TABLE exercise_map (
+    raw_key          TEXT NOT NULL,
+    note             TEXT NOT NULL DEFAULT '',   -- '' = vale per qualunque nota
+    exercise_name    TEXT NOT NULL,
+    primary_group    TEXT,
+    secondary_groups TEXT,
+    updated_at       TEXT NOT NULL,
+    PRIMARY KEY (raw_key, note)
+);
+"""
+
+_MIGRATIONS = [_MIGRATION_1, _MIGRATION_2]
+
 # L'ultima correzione per ogni serie.
 _VIEWS = """
 DROP VIEW IF EXISTS v_corrections_effective;
@@ -174,10 +197,12 @@ SELECT
     s.duration_s,
     COALESCE(c.exercise_key, s.raw_exercise_key)            AS raw_exercise_key,
     s.raw_exercise_label,
-    COALESCE(m.exercise_name, s.raw_exercise_label, s.raw_exercise_key) AS exercise_name,
-    m.primary_group     AS muscle_group,
-    m.secondary_groups,
-    CASE WHEN m.raw_key IS NULL THEN 1 ELSE 0 END           AS unmapped,
+    s.wkt_step_note,
+    COALESCE(ms.exercise_name, mg.exercise_name,
+             s.raw_exercise_label, s.raw_exercise_key)      AS exercise_name,
+    COALESCE(ms.primary_group, mg.primary_group)            AS muscle_group,
+    COALESCE(ms.secondary_groups, mg.secondary_groups)      AS secondary_groups,
+    CASE WHEN ms.raw_key IS NULL AND mg.raw_key IS NULL THEN 1 ELSE 0 END AS unmapped,
     COALESCE(c.reps, s.reps)                                AS reps,
     COALESCE(c.weight_kg, s.weight_kg)                      AS weight_kg,
     s.reps                                                  AS reps_raw,
@@ -197,8 +222,16 @@ FROM sets s
 JOIN sessions ses ON ses.id = s.session_id
 LEFT JOIN v_corrections_effective c
        ON c.session_uid = ses.session_uid AND c.set_index = s.set_index
-LEFT JOIN exercise_map m
-       ON m.raw_key = COALESCE(c.exercise_key, s.raw_exercise_key);
+-- Due join sulla mappatura: quella qualificata dalla nota dello step vince
+-- su quella generica. E' cosi' che un Copenhagen plank si distingue da un
+-- plank laterale, pur avendo la stessa chiave grezza.
+LEFT JOIN exercise_map ms
+       ON ms.raw_key = COALESCE(c.exercise_key, s.raw_exercise_key)
+      AND ms.note <> ''
+      AND ms.note = LOWER(TRIM(COALESCE(s.wkt_step_note, '')))
+LEFT JOIN exercise_map mg
+       ON mg.raw_key = COALESCE(c.exercise_key, s.raw_exercise_key)
+      AND mg.note = '';
 """
 
 
@@ -215,17 +248,27 @@ def connect(path: Path) -> sqlite3.Connection:
 
 
 def migrate(conn: sqlite3.Connection) -> int:
-    """Applica lo schema. Idempotente: si puo' richiamare a ogni avvio."""
-    conn.executescript(_SCHEMA)
-    conn.executescript(_VIEWS)
+    """Applica le migrazioni mancanti. Idempotente: si richiama a ogni avvio.
+
+    Ogni migrazione ha un numero e viene applicata una volta sola; le viste
+    invece si ricreano sempre, cosi' cambiarle non richiede una migrazione.
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS schema_migrations ("
+        "version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
+    )
     row = conn.execute("SELECT MAX(version) AS v FROM schema_migrations").fetchone()
     current = row["v"] if row and row["v"] is not None else 0
-    if current < SCHEMA_VERSION:
+    for version, script in enumerate(_MIGRATIONS, start=1):
+        if version <= current:
+            continue
+        conn.executescript(script)
         conn.execute(
-            "INSERT OR REPLACE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-            (SCHEMA_VERSION, _now()),
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+            (version, _now()),
         )
-        conn.commit()
+    conn.executescript(_VIEWS)
+    conn.commit()
     return SCHEMA_VERSION
 
 
@@ -358,9 +401,9 @@ def store_activity(conn: sqlite3.Connection, act: ParsedActivity) -> tuple[int, 
         """INSERT INTO sets (
                session_id, set_index, order_in_session, set_type, start_time_utc,
                duration_s, reps, weight_kg, weight_display_unit, planned_reps,
-               planned_weight_kg, wkt_step_index, raw_exercise_key,
+               planned_weight_kg, wkt_step_index, wkt_step_note, raw_exercise_key,
                raw_exercise_label, category_raw, subcategory_raw)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         [
             (
                 session_id,
@@ -375,6 +418,7 @@ def store_activity(conn: sqlite3.Connection, act: ParsedActivity) -> tuple[int, 
                 s.planned_reps,
                 s.planned_weight_kg,
                 s.wkt_step_index,
+                s.step_note,
                 s.exercise_key,
                 s.exercise_label,
                 json.dumps([c for c in s.category_raw]),
@@ -407,6 +451,7 @@ def refresh_exercise_map(conn: sqlite3.Connection, entries: Iterable[dict[str, A
     rows = [
         (
             e["raw_key"],
+            (e.get("note") or "").strip().lower(),
             e["exercise_name"],
             e.get("primary_group"),
             json.dumps(e.get("secondary_groups") or [], ensure_ascii=False),
@@ -416,9 +461,9 @@ def refresh_exercise_map(conn: sqlite3.Connection, entries: Iterable[dict[str, A
     ]
     conn.execute("DELETE FROM exercise_map")
     conn.executemany(
-        """INSERT INTO exercise_map (raw_key, exercise_name, primary_group,
+        """INSERT INTO exercise_map (raw_key, note, exercise_name, primary_group,
                                      secondary_groups, updated_at)
-           VALUES (?,?,?,?,?)""",
+           VALUES (?,?,?,?,?,?)""",
         rows,
     )
     conn.commit()
@@ -463,6 +508,7 @@ def unmapped_raw_keys(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Chiavi grezze presenti nel DB e non ancora nel YAML, piu' frequenti prima."""
     return conn.execute(
         """SELECT raw_exercise_key AS raw_key,
+                  COALESCE(wkt_step_note, '') AS note,
                   MAX(raw_exercise_label) AS label,
                   COUNT(*) AS n_sets,
                   COUNT(DISTINCT session_id) AS n_sessions,
@@ -470,6 +516,6 @@ def unmapped_raw_keys(conn: sqlite3.Connection) -> list[sqlite3.Row]:
                   MAX(local_date) AS last_seen
            FROM v_sets
            WHERE set_type = 'active' AND unmapped = 1 AND raw_exercise_key IS NOT NULL
-           GROUP BY raw_exercise_key
+           GROUP BY raw_exercise_key, COALESCE(wkt_step_note, '')
            ORDER BY n_sets DESC, raw_key"""
     ).fetchall()
