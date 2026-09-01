@@ -1,66 +1,149 @@
-# Mappatura esercizi Garmin -> nomi reali del programma.
+# Mappatura esercizi: chiavi grezze Garmin -> nomi reali e gruppi muscolari.
+#
 # File versionato ed editabile a mano: e' la fonte di verita' della
 # normalizzazione, il codice non indovina nulla da solo.
 #
-# Schema (definitivo dalla Fase 4, chiavi `match` da completare dopo aver
-# ispezionato un file .fit reale):
+#   - name: nome che voglio leggere in dashboard
+#     primary: gruppo muscolare primario
+#     secondary: [gruppi secondari]
+#     match: [chiavi grezze, in OR]
 #
-#   exercises:
-#     - name: "nome che voglio vedere in dashboard"
-#       primary: gruppo muscolare primario
-#       secondary: [gruppi secondari]
-#       match:                 # criteri sui dati grezzi Garmin, in OR
-#         - category: DEADLIFT           # categoria del catalogo Garmin
-#           exercise_name: TRAP_BAR_DEADLIFT   # sotto-nome, opzionale
-#         - category: 6                  # anche indici numerici grezzi
-#           exercise_name: 12
+# Le chiavi grezze sono quelle che stampa `strength-tracker unmapped`:
+# `categoria/nome` risolti dal catalogo FIT (`deadlift/trap_bar_deadlift`),
+# oppure numeri grezzi quando il catalogo non li conosce (`250/7`).
+# Un esercizio puo' averne piu' d'una: l'orologio a volte cambia voce fra
+# una seduta e l'altra.
 #
-# Le voci `match` sono vuote finche' non vediamo come l'Epix Pro Gen 2 scrive
-# davvero questi esercizi: meglio un esercizio `unmapped` che una mappatura
-# inventata. `strength-tracker unmapped` elenca i grezzi da assegnare.
+# `strength-tracker unmapped --yaml` genera le voci gia' pronte da incollare.
 
 exercises:
+
+  # ---- il programma -------------------------------------------------------
+  # Le chiavi qui sotto vengono dal catalogo FIT ufficiale: esistono, ma va
+  # confermato quale sceglie davvero l'orologio. Dopo le prime sedute
+  # controlla con `strength-tracker unmapped`.
+
   - name: Trap bar deadlift
     primary: catena_posteriore
     secondary: [glutei, hamstring, quadricipiti]
-    note: >-
-      Probabilmente registrato come DEADLIFT generico: la trap bar non ha
-      quasi mai una voce dedicata nel catalogo Garmin.
-    match: []
+    match:
+      - deadlift/trap_bar_deadlift
+      # se sull'orologio scegli il deadlift generico finisce qui:
+      - deadlift/barbell_deadlift
 
   - name: Dumbbell romanian deadlift
     primary: hamstring
     secondary: [glutei, catena_posteriore]
-    match: []
+    match:
+      - deadlift/dumbbell_straight_leg_deadlift
+      - deadlift/romanian_deadlift
+      - deadlift/dumbbell_deadlift
 
   - name: Bulgarian split squat
     primary: quadricipiti
     secondary: [glutei]
-    match: []
+    match:
+      - lunge/dumbbell_bulgarian_split_squat
+      - lunge/barbell_bulgarian_split_squat
+      - lunge/overhead_bulgarian_split_squat
+      - squat/dumbbell_split_squat
 
   - name: Step-up
     primary: quadricipiti
     secondary: [glutei]
-    match: []
+    match:
+      - squat/step_up
+      - squat/dumbbell_step_up
+      - squat/weighted_step_up
+      - squat/barbell_step_up
 
   - name: Copenhagen plank
     primary: adduttori
     secondary: [core]
-    note: >-
-      Quasi certamente assente dal catalogo Garmin: arrivera' come esercizio
-      generico o non riconosciuto. Va agganciato a mano.
-    match: []
+    # Verificato sul catalogo FIT: il Copenhagen plank NON esiste. Arrivera'
+    # come qualunque voce tu scelga sull'orologio (un plank generico, o
+    # un'adduzione). Lancia `unmapped` dopo la prima seduta che lo contiene e
+    # incolla qui la chiave che compare.
+    match:
+      - hip_stability/standing_adduction
+      - hip_stability/sliding_hip_adduction
+      - banded_exercises/leg_adduction
 
   - name: Band-assisted pull-up
     primary: dorsali
     secondary: [bicipiti]
-    match: []
+    # confermato: e' la chiave trovata nella seduta del 01/09/2026
+    match:
+      - pull_up/band_assisted_pull_up
+      - pull_up/banded_pull_ups
 
   - name: Military press
     primary: spalle
     secondary: [tricipiti]
-    match: []
+    match:
+      - shoulder_press/military_press
+      - shoulder_press/overhead_barbell_press
+      - shoulder_press/overhead_dumbbell_press
+      - shoulder_press/barbell_shoulder_press
 
-# Gruppi muscolari sotto osservazione speciale nella dashboard (interferenza
-# con il carico di corsa).
+  # ---- altri esercizi gia' visti nelle sedute ------------------------------
+  # Presi dalla seduta "Day 1 Upper Body" del 01/09/2026.
+
+  - name: Dumbbell bench press
+    primary: petto
+    secondary: [tricipiti, spalle]
+    match: [bench_press/dumbbell_bench_press]
+
+  - name: Seated dumbbell shoulder press
+    primary: spalle
+    secondary: [tricipiti]
+    match: [shoulder_press/seated_dumbbell_shoulder_press]
+
+  - name: Wide-grip lat pulldown
+    primary: dorsali
+    secondary: [bicipiti]
+    match: [pull_up/wide_grip_lat_pulldown]
+
+  - name: Single-arm dumbbell row
+    primary: dorsali
+    secondary: [core]
+    match: [row/single_arm_neutral_grip_dumbbell_row_and_rotation]
+
+  - name: Face pull
+    primary: spalle
+    secondary: [dorsali]
+    match: [row/face_pull]
+
+  - name: Banded pull apart
+    primary: spalle
+    secondary: [dorsali]
+    match: [banded_exercises/pull_apart]
+
+  - name: Band external rotation
+    primary: cuffia_rotatori
+    secondary: [spalle]
+    match: [shoulder_stability/band_external_rotation]
+
+  - name: Cable core press
+    primary: core
+    secondary: []
+    match: [core/cable_core_press]
+
+  - name: Dead bug
+    primary: core
+    secondary: []
+    match: [hip_stability/dead_bug]
+
+  - name: Side plank
+    primary: core
+    secondary: [adduttori]
+    match: [plank/side_plank]
+
+  - name: Cardio
+    primary: cardio
+    secondary: []
+    match: [cardio]
+
+# Gruppi sotto osservazione speciale in dashboard: sono quelli a rischio di
+# interferenza con il carico di corsa.
 focus_groups: [hamstring, adduttori, glutei]

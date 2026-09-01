@@ -21,8 +21,8 @@ Il progetto procede per fasi, con una verifica alla fine di ognuna.
 | --- | --- | --- |
 | 1 | Scheletro del repo, `pyproject`, CLI funzionante | ✅ fatto |
 | 2 | Parser FIT + test + dump JSON di ispezione | ✅ fatto |
-| 3 | Schema SQLite e ingestione idempotente | ⬜ |
-| 4 | Mappatura esercizi e metriche | ⬜ |
+| 3 | Schema SQLite, ingestione idempotente, mappatura, correzioni | ✅ fatto |
+| 4 | Metriche (volume, e1RM, densità, deriva FC) | ⬜ |
 | 5 | Dashboard HTML | ⬜ |
 
 I comandi non ancora implementati escono con codice `1` e lo dicono: non
@@ -86,6 +86,84 @@ File troncati, file non-FIT e attivita' senza messaggi `set` (una corsa, per
 dire) vengono **saltati con un motivo esplicito**, senza far cadere il resto
 del batch. `parse_paths()` restituisce `(path, attivita', motivo_dello_skip)`.
 
+## Il database
+
+Quattro tabelle di dati più due di servizio, nessun ORM:
+
+| Tabella | Contenuto |
+| --- | --- |
+| `sessions` | una riga per attività: `session_uid` univoco, data locale, settimana ISO, durata, tempo attivo, FC media/max, calorie, dispositivo, file sorgente, ora di ingestione |
+| `sets` | una riga per serie **e** per pausa (`set_type`), solo dati grezzi del file |
+| `hr_samples` | frequenza cardiaca a 1 Hz, `(session_id, ts_utc)` come chiave |
+| `corrections` | override manuali, append-only |
+| `exercise_map` | proiezione del YAML di mappatura, riscritta a ogni comando |
+| `ingested_files` | registro dei file già letti, con il motivo degli scarti |
+
+### Dati grezzi, mappatura e correzioni restano separati
+
+`sets` contiene solo quello che c'è nel file. La normalizzazione vive in
+`exercise_map` e le correzioni in `corrections`: la vista **`v_sets`** le
+sovrappone in lettura ai dati grezzi, che non vengono mai riscritti. Tre
+conseguenze pratiche:
+
+- editi `config/exercise_mapping.yaml` e rilanci `report`: **niente
+  re-ingestione**, i nomi cambiano subito;
+- ogni riga di `v_sets` porta sia il valore effettivo (`reps`, `weight_kg`)
+  sia quello del file (`reps_raw`, `weight_kg_raw`) e la sua provenienza
+  (`data_source` = `file` o `correzione`);
+- `volume_kg` è `NULL` se manca reps **o** peso. Mai zero al posto di "non
+  misurato": è la differenza fra un plank a corpo libero e un dato assente.
+
+Le correzioni non puntano a `sets.id` (che cambia con `--force`) ma alla
+coppia stabile `(session_uid, set_index)`: **sopravvivono alla
+re-ingestione**. Sono append-only, vale l'ultima, e lo storico resta.
+
+### Idempotenza su tre livelli
+
+1. i file già letti (stesso percorso, stesso sha256) vengono saltati senza
+   nemmeno riaprirli, salvo `--force`;
+2. `sessions.session_uid` è `UNIQUE`: lo stesso allenamento non entra due
+   volte nemmeno se rinomini o sposti il file;
+3. riscrivere una seduta cancella e reinserisce le sue serie e i suoi
+   campioni FC — nessun duplicato, e le correzioni restano.
+
+### Perché la FC resta a campione singolo
+
+1 Hz sono ~4.300 righe per seduta, cioè ~700k righe l'anno a 3 sedute a
+settimana: SQLite non se ne accorge. Tenere il grezzo permette di
+ricalcolare la FC per serie anche se domani cambiassero i confini delle
+serie (o se una correzione ne sposta uno). Aggregare subito farebbe
+risparmiare spazio che non è un problema, perdendo dati che non si
+recuperano.
+
+### Spazio per il carico di corsa
+
+`sessions` è già la tabella generica delle attività: ha `activity_type`,
+durata, FC, calorie e la settimana ISO precalcolata. Aggiungere le sedute di
+corsa significa inserirle qui con `activity_type='run'` più una tabella di
+dettaglio (distanza, passo, dislivello) con FK su `sessions(id)`. Nessuna
+migrazione distruttiva, e l'incrocio settimanale palestra/corsa diventa una
+join su `(iso_year, iso_week)`.
+
+### Reps e carichi mancanti nell'export Garmin
+
+Garmin Connect esporta i `.fit` solo come **"Export Original"**: il file
+originale caricato dall'orologio. Le modifiche fatte dopo dall'app (reps,
+carichi, correzioni) restano nel database di Connect e **non finiscono mai nel
+FIT esportato**. Se una seduta è stata seguita come allenamento strutturato e
+i valori non sono stati confermati sull'orologio, `repetitions` e `weight`
+arrivano vuoti: volume, tonnellaggio ed e1RM non sono calcolabili e restano
+`NULL`.
+
+Due strade, non alternative:
+
+- confermare reps e peso **sull'orologio** a fine serie, così entrano nel file;
+- inserirli a posteriori con `strength-tracker correct <set_id> --reps N
+  --weight K`, che li scrive in `corrections` senza toccare i dati grezzi.
+
+Le metriche che non dipendono dal carico — serie per gruppo muscolare, tempo
+sotto tensione, densità della seduta, deriva della FC — funzionano comunque.
+
 ## Installazione
 
 Con [uv](https://docs.astral.sh/uv/) (consigliato):
@@ -106,12 +184,14 @@ strength-tracker --help
 ## Uso
 
 ```bash
-strength-tracker ingest <path>       # file singolo o cartella, ricorsivo
-strength-tracker inspect <file.fit>  # dump JSON dei messaggi grezzi
-strength-tracker unmapped            # esercizi non ancora mappati
-strength-tracker correct <set_id> --reps N --weight K
-strength-tracker report              # genera output/dashboard.html
-strength-tracker stats               # riepilogo testuale nel terminale
+strength-tracker ingest <path>          # file singolo o cartella, ricorsivo
+strength-tracker ingest <path> --force  # rilegge anche i file già processati
+strength-tracker inspect <file.fit>     # dump JSON dei messaggi grezzi (--raw per gli unknown_*)
+strength-tracker unmapped               # esercizi non ancora mappati
+strength-tracker unmapped --yaml        # le voci già pronte da incollare nel YAML
+strength-tracker correct <set_id> --reps N --weight K [--exercise RAW_KEY] [--note "..."]
+strength-tracker report                 # genera output/dashboard.html
+strength-tracker stats                  # riepilogo testuale nel terminale
 ```
 
 Il flusso normale del dopo-allenamento e' `ingest` seguito da `report`,

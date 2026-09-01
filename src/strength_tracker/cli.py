@@ -25,9 +25,6 @@ from . import (
 # Fase in cui ciascun comando viene implementato: finche' non e' pronto il
 # comando esce con codice 1 e lo dice, invece di fingere di aver lavorato.
 _PHASE = {
-    "ingest": "3 (schema SQLite e ingestione)",
-    "unmapped": "4 (mappatura esercizi)",
-    "correct": "3 (schema SQLite e ingestione)",
     "report": "5 (dashboard)",
     "stats": "4 (metriche)",
 }
@@ -40,6 +37,119 @@ def _todo(command: str) -> int:
         file=sys.stderr,
     )
     return 1
+
+
+
+def _open_db(args: argparse.Namespace):
+    from . import db
+
+    return db.connect(args.db or default_db_path())
+
+
+def _load_mapping_into(conn, args: argparse.Namespace) -> int:
+    """Riallinea `exercise_map` al YAML. E' una proiezione: si rifa' ogni volta."""
+    from . import db
+    from .mapping import MappingError, load_mapping
+
+    path = getattr(args, "mapping", None) or default_mapping_path()
+    try:
+        mapping = load_mapping(path)
+    except MappingError as exc:
+        print(f"[strength-tracker] mappatura non valida: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+    return db.refresh_exercise_map(conn, mapping.as_rows())
+
+
+def cmd_ingest(args: argparse.Namespace) -> int:
+    """Importa file .fit nel database, senza mai duplicare nulla."""
+    from .ingest import ingest_path
+
+    if not args.path.exists():
+        print(f"[strength-tracker] percorso non trovato: {args.path}", file=sys.stderr)
+        return 2
+    conn = _open_db(args)
+    _load_mapping_into(conn, args)
+    report = ingest_path(conn, args.path, force=args.force)
+    for line in report.as_lines():
+        print(line)
+    if report.scanned == 0:
+        print(f"[strength-tracker] nessun file .fit sotto {args.path}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_unmapped(args: argparse.Namespace) -> int:
+    """Elenca le chiavi grezze non ancora presenti nel YAML di mappatura."""
+    from . import db
+
+    conn = _open_db(args)
+    _load_mapping_into(conn, args)
+    righe = db.unmapped_raw_keys(conn)
+    if not righe:
+        print("Nessun esercizio non mappato: la mappatura copre tutte le serie nel database.")
+        return 0
+
+    if args.yaml:
+        print("# Da incollare sotto 'exercises:' in config/exercise_mapping.yaml")
+        for r in righe:
+            etichetta = r["label"] or r["raw_key"]
+            print(f"  - name: {etichetta}")
+            print("    primary: DA_COMPLETARE")
+            print("    secondary: []")
+            print("    match:")
+            print(f"      - {r['raw_key']}")
+        return 0
+
+    print(f"{len(righe)} esercizi non mappati:\n")
+    print(f"{'chiave grezza':52s} {'serie':>6} {'sedute':>7}  {'dal':10s} {'al':10s} etichetta Garmin")
+    print("-" * 120)
+    for r in righe:
+        print(
+            f"{r['raw_key']:52s} {r['n_sets']:6d} {r['n_sessions']:7d}  "
+            f"{_data_it(r['first_seen']):10s} {_data_it(r['last_seen']):10s} {r['label'] or ''}"
+        )
+    print("\nAggiungili a config/exercise_mapping.yaml (o rilancia con --yaml).")
+    return 0
+
+
+def cmd_correct(args: argparse.Namespace) -> int:
+    """Registra un override manuale su una serie, senza toccare i dati grezzi."""
+    from . import db
+
+    conn = _open_db(args)
+    try:
+        corr_id = db.add_correction(
+            conn,
+            args.set_id,
+            reps=args.reps,
+            weight_kg=args.weight,
+            exercise_key=args.exercise,
+            note=args.note,
+        )
+    except KeyError as exc:
+        print(f"[strength-tracker] {exc}", file=sys.stderr)
+        return 2
+    except ValueError as exc:
+        print(f"[strength-tracker] {exc}", file=sys.stderr)
+        return 2
+    riga = conn.execute(
+        "SELECT * FROM v_sets WHERE set_id = ?", (args.set_id,)
+    ).fetchone()
+    print(
+        f"Correzione #{corr_id} sulla serie {args.set_id} "
+        f"({_data_it(riga['local_date'])}, {riga['exercise_name'] or 'esercizio ignoto'}): "
+        f"reps={riga['reps']} peso={riga['weight_kg']} kg "
+        f"(nel file: reps={riga['reps_raw']} peso={riga['weight_kg_raw']})"
+    )
+    return 0
+
+
+def _data_it(iso: str | None) -> str:
+    """YYYY-MM-DD -> DD/MM/YYYY."""
+    if not iso:
+        return "-"
+    parti = iso.split("-")
+    return f"{parti[2]}/{parti[1]}/{parti[0]}" if len(parti) == 3 else iso
 
 
 def cmd_inspect(args: argparse.Namespace) -> int:
@@ -91,11 +201,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_ingest.add_argument("path", type=Path, help="file .fit o cartella da importare")
     p_ingest.add_argument(
+        "--mapping",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=f"mappatura esercizi (default: {default_mapping_path()})",
+    )
+    p_ingest.add_argument(
         "--force",
         action="store_true",
         help="rilegge anche i file gia' processati (resta idempotente: nessun duplicato)",
     )
-    p_ingest.set_defaults(func=lambda args: _todo("ingest"))
+    p_ingest.set_defaults(func=cmd_ingest)
 
     p_inspect = sub.add_parser(
         "inspect",
@@ -121,7 +238,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_unmapped = sub.add_parser(
         "unmapped", help="elenca i nomi esercizio grezzi presenti nel DB e non ancora mappati"
     )
-    p_unmapped.set_defaults(func=lambda args: _todo("unmapped"))
+    p_unmapped.add_argument(
+        "--mapping",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=f"mappatura esercizi (default: {default_mapping_path()})",
+    )
+    p_unmapped.add_argument(
+        "--yaml",
+        action="store_true",
+        help="stampa le voci gia' pronte da incollare in exercise_mapping.yaml",
+    )
+    p_unmapped.set_defaults(func=cmd_unmapped)
 
     p_correct = sub.add_parser(
         "correct",
@@ -130,8 +259,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_correct.add_argument("set_id", type=int, help="id della serie da correggere")
     p_correct.add_argument("--reps", type=int, default=None, help="ripetizioni corrette")
     p_correct.add_argument("--weight", type=float, default=None, metavar="KG", help="peso corretto in kg")
+    p_correct.add_argument(
+        "--exercise",
+        default=None,
+        metavar="RAW_KEY",
+        help="riassegna la serie a un'altra chiave grezza (es. deadlift/barbell_deadlift)",
+    )
     p_correct.add_argument("--note", default=None, help="nota libera sulla correzione")
-    p_correct.set_defaults(func=lambda args: _todo("correct"))
+    p_correct.set_defaults(func=cmd_correct)
 
     p_report = sub.add_parser("report", help="genera la dashboard HTML")
     p_report.add_argument(
