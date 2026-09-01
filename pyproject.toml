@@ -26,6 +26,12 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/strength_tracker"]
 
+# Template e Chart.js viaggiano dentro il pacchetto, cosi' `report` funziona
+# anche se il comando viene lanciato da fuori dal repo.
+[tool.hatch.build.targets.wheel.force-include]
+"templates" = "strength_tracker/templates"
+"vendor" = "strength_tracker/vendor"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

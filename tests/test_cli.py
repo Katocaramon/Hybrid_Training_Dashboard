@@ -33,12 +33,6 @@ def test_ogni_comando_e_registrato(comando):
     assert comando in azioni
 
 
-def test_comandi_non_implementati_escono_a_uno(capsys):
-    # Meglio un fallimento esplicito che un successo silenzioso.
-    assert main(["report"]) == 1
-    assert "non e' ancora implementato" in capsys.readouterr().err
-
-
 def test_correct_richiede_un_bersaglio(tmp_path, capsys):
     assert main(["--db", str(tmp_path / "x.db"), "correct"]) == 2
     assert "set_id" in capsys.readouterr().err

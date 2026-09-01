@@ -1,3 +1,885 @@
-{# Template della dashboard — implementato nella Fase 5.
-   Un solo file HTML self-contained: Chart.js viene inserito inline da
-   vendor/chart.min.js, nessuna richiesta di rete a runtime. #}
+<!doctype html>
+{# Dashboard statica e self-contained: Chart.js e i dati sono inline, nessuna
+   richiesta di rete. Si apre con doppio click, anche offline. #}
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Strength Tracker</title>
+<style>
+:root {
+  color-scheme: light;
+  --plane: #f9f9f7;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --bordo: rgba(11,11,11,0.10);
+  --ok: #0ca30c;
+  --warn: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  --accento: #2a78d6;
+  --accento-tenue: rgba(42,120,214,0.10);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --plane: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --bordo: rgba(255,255,255,0.10);
+    --accento: #3987e5;
+    --accento-tenue: rgba(57,135,229,0.16);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --plane: #0d0d0d;
+  --surface: #1a1a19;
+  --ink: #ffffff;
+  --ink-2: #c3c2b7;
+  --muted: #898781;
+  --grid: #2c2c2a;
+  --axis: #383835;
+  --bordo: rgba(255,255,255,0.10);
+  --accento: #3987e5;
+  --accento-tenue: rgba(57,135,229,0.16);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--plane);
+  color: var(--ink);
+  font: 13.5px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.wrap { max-width: 1180px; margin: 0 auto; padding: 28px 24px 64px; }
+
+header.top { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 6px; }
+header.top h1 { font-size: 19px; font-weight: 650; margin: 0; letter-spacing: -0.01em; }
+header.top .periodo { color: var(--ink-2); font-size: 13px; }
+header.top .spacer { flex: 1; }
+button.tema {
+  border: 1px solid var(--bordo); background: var(--surface); color: var(--ink-2);
+  border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer;
+}
+button.tema:hover { color: var(--ink); }
+.generato { color: var(--muted); font-size: 12px; margin: 0 0 22px; }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(158px, 1fr)); gap: 1px;
+         background: var(--bordo); border: 1px solid var(--bordo); border-radius: 8px;
+         overflow: hidden; margin-bottom: 26px; }
+.tile { background: var(--surface); padding: 12px 14px 13px; }
+.tile .etichetta { color: var(--muted); font-size: 11.5px; text-transform: uppercase;
+                   letter-spacing: 0.04em; }
+.tile .valore { font-size: 23px; font-weight: 600; margin-top: 3px; letter-spacing: -0.02em; }
+.tile .nota { color: var(--ink-2); font-size: 11.5px; margin-top: 2px; }
+.tile .valore.assente { font-size: 15px; font-weight: 500; color: var(--ink-2); padding: 5px 0; }
+
+section.card { background: var(--surface); border: 1px solid var(--bordo); border-radius: 8px;
+               padding: 16px 18px 18px; margin-bottom: 18px; }
+section.card > h2 { font-size: 14px; font-weight: 650; margin: 0 0 2px; letter-spacing: -0.005em; }
+section.card > p.sub { color: var(--ink-2); font-size: 12.5px; margin: 0 0 14px; }
+.barra-strumenti { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0 0 12px; }
+.barra-strumenti label { color: var(--ink-2); font-size: 12.5px; }
+select, .segm button {
+  border: 1px solid var(--bordo); background: var(--plane); color: var(--ink);
+  border-radius: 6px; padding: 4px 8px; font: inherit; font-size: 12.5px;
+}
+select { max-width: 340px; }
+.segm { display: inline-flex; gap: 1px; background: var(--bordo); border: 1px solid var(--bordo);
+        border-radius: 6px; overflow: hidden; }
+.segm button { border: 0; border-radius: 0; cursor: pointer; color: var(--ink-2); }
+.segm button[aria-pressed="true"] { background: var(--accento-tenue); color: var(--ink); font-weight: 600; }
+.link { background: none; border: 0; color: var(--accento); font: inherit; font-size: 12.5px;
+        cursor: pointer; padding: 0; text-decoration: underline; text-underline-offset: 2px; }
+
+.grafico { position: relative; height: 300px; }
+.grafico.basso { height: 190px; }
+.piccoli { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+.piccoli figure { margin: 0; }
+.piccoli figcaption { color: var(--ink-2); font-size: 12.5px; margin-bottom: 6px; font-weight: 600; }
+.due-colonne { display: grid; grid-template-columns: 1.6fr 1fr; gap: 20px; align-items: start; }
+@media (max-width: 860px) { .due-colonne { grid-template-columns: 1fr; } }
+
+.scroll-x { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th { color: var(--muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase;
+     letter-spacing: 0.03em; position: sticky; top: 0; background: var(--surface); }
+th:first-child, td:first-child, th.testo, td.testo { text-align: left; }
+td.num { font-variant-numeric: tabular-nums; }
+tbody tr.seduta { cursor: pointer; }
+tbody tr.seduta:hover { background: var(--accento-tenue); }
+tr.dettaglio > td { padding: 0; border-bottom: 1px solid var(--grid); }
+tr.dettaglio table { border-top: 0; }
+tr.dettaglio td.contenitore { padding: 8px 8px 14px 26px; background: var(--plane); }
+.assente { color: var(--muted); }
+.tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 999px;
+       border: 1px solid var(--bordo); color: var(--ink-2); }
+.tag.corretto { border-color: var(--accento); color: var(--accento); }
+.tag.stima { border-color: var(--warn); color: var(--ink-2); }
+.chiave { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
+
+.avviso { display: flex; gap: 8px; align-items: flex-start; background: var(--plane);
+          border: 1px solid var(--bordo); border-left: 3px solid var(--warn);
+          border-radius: 6px; padding: 9px 12px; margin: 12px 0 0; font-size: 12.5px;
+          color: var(--ink-2); }
+.avviso .icona { font-weight: 700; color: var(--ink-2); }
+.anomalia { margin-bottom: 16px; }
+.anomalia h3 { font-size: 12.5px; margin: 0 0 6px; font-weight: 650; display: flex; gap: 7px; align-items: center; }
+.anomalia h3 .conta { font-variant-numeric: tabular-nums; color: var(--ink-2); font-weight: 500; }
+.anomalia .vuoto { color: var(--muted); font-size: 12.5px; }
+.pallino { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+footer.note { color: var(--ink-2); font-size: 12px; margin-top: 28px; }
+footer.note h2 { font-size: 13px; color: var(--ink); margin: 0 0 8px; }
+footer.note li { margin-bottom: 4px; }
+footer.note code { font-size: 11.5px; background: var(--surface); border: 1px solid var(--bordo);
+                   border-radius: 4px; padding: 0 4px; }
+.nascosto { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <h1>Strength Tracker</h1>
+    <span class="periodo" id="periodo"></span>
+    <span class="spacer"></span>
+    <button class="tema" id="tema" type="button" title="Cambia tema">Tema: auto</button>
+  </header>
+  <p class="generato" id="generato"></p>
+
+  <div class="tiles" id="tiles"></div>
+
+  <section class="card">
+    <h2>Volume settimanale</h2>
+    <p class="sub">Tonnellaggio (peso x ripetizioni) per settimana, con media mobile a
+      <span id="finestra"></span> settimane. Conta solo le serie con carico esterno:
+      trazioni assistite e corpo libero restano fuori.</p>
+    <div class="grafico"><canvas id="g-volume"></canvas></div>
+    <div class="barra-strumenti" style="margin-top:12px">
+      <button class="link" type="button" data-tabella="t-volume">Mostra tabella</button>
+    </div>
+    <div class="scroll-x nascosto" id="t-volume"></div>
+  </section>
+
+  <section class="card">
+    <h2>Carico per gruppo muscolare</h2>
+    <p class="sub">Per settimana. Le serie sono la misura piu' robusta quando gli esercizi
+      cambiano o il carico non e' misurabile; il tonnellaggio e' disponibile solo dove
+      peso e ripetizioni ci sono entrambi.</p>
+    <div class="barra-strumenti">
+      <div class="segm" role="group" aria-label="Misura">
+        <button type="button" data-misura="serie" aria-pressed="true">Serie</button>
+        <button type="button" data-misura="volume" aria-pressed="false">Tonnellaggio</button>
+      </div>
+      <button class="link" type="button" data-tabella="t-gruppi">Mostra tabella</button>
+    </div>
+    <div class="grafico"><canvas id="g-gruppi"></canvas></div>
+    <div class="scroll-x nascosto" id="t-gruppi"></div>
+    <div id="avviso-gruppi"></div>
+  </section>
+
+  <section class="card" id="card-focus">
+    <h2>Gruppi sotto osservazione</h2>
+    <p class="sub">Serie per settimana sui gruppi a rischio di interferenza con il carico
+      di corsa.</p>
+    <div class="piccoli" id="focus"></div>
+  </section>
+
+  <section class="card">
+    <h2>Progressione per esercizio</h2>
+    <div class="barra-strumenti">
+      <label for="sel-esercizio">Esercizio</label>
+      <select id="sel-esercizio"></select>
+      <span class="assente" id="info-esercizio"></span>
+    </div>
+    <div class="due-colonne">
+      <figure style="margin:0">
+        <figcaption class="sub" id="cap-carico" style="margin-bottom:6px"></figcaption>
+        <div class="grafico basso"><canvas id="g-progressione"></canvas></div>
+      </figure>
+      <figure style="margin:0">
+        <figcaption class="sub" style="margin-bottom:6px">Ripetizioni totali per seduta</figcaption>
+        <div class="grafico basso"><canvas id="g-reps"></canvas></div>
+      </figure>
+    </div>
+    <div id="avviso-esercizio"></div>
+    <div class="scroll-x" id="t-progressione" style="margin-top:14px"></div>
+  </section>
+
+  <section class="card">
+    <h2>Ultime sedute</h2>
+    <p class="sub">Clicca una riga per aprire il dettaglio serie per serie.</p>
+    <div class="scroll-x" id="t-sedute"></div>
+  </section>
+
+  <section class="card">
+    <h2>Anomalie</h2>
+    <p class="sub">Da guardare prima di fidarsi dei numeri.</p>
+    <div id="anomalie"></div>
+  </section>
+
+  <footer class="note">
+    <h2>Note di metodo</h2>
+    <ul>
+      <li><b>Tonnellaggio</b> = somma di peso x ripetizioni. Solo le serie in cui il peso e'
+        un carico esterno. Se manca il peso o le ripetizioni la serie non contribuisce e il
+        valore resta <i>non calcolabile</i>, mai zero.</li>
+      <li><b>e1RM</b> con la formula di Epley: peso x (1 + rip. / 30). E' una stima lineare
+        tarata sulle serie corte: sopra le <span id="maxreps"></span> ripetizioni e'
+        segnalata come poco affidabile. Su una ripetizione sola restituisce il peso.</li>
+      <li><b>Trazioni assistite</b>: il peso registrato dall'orologio e' l'<i>aiuto</i> della
+        macchina, non il carico. Non viene moltiplicato per le ripetizioni; il carico
+        effettivo (peso corporeo meno assistenza) e' una stima ed e' marcato come tale.
+        Qui il progresso e' l'assistenza che cala.</li>
+      <li><b>Densita'</b> = tonnellaggio / tempo attivo della seduta.
+        <b>Lavoro/riposo</b> = durata delle serie attive / durata delle pause.</li>
+      <li><b>Deriva FC</b> = FC media dell'ultimo terzo delle serie meno quella del primo
+        terzo. Proxy grezzo di fatica: sale anche solo perche' la seduta scalda. Servono
+        almeno tre serie con FC.</li>
+      <li>La <b>media mobile</b> usa solo le settimane con dati: una settimana senza
+        allenamento non vale zero.</li>
+      <li>Le <b>correzioni manuali</b> sono applicate sopra i dati grezzi, che restano
+        intatti nel database. La colonna <code>fonte</code> dice da dove viene ogni valore.</li>
+    </ul>
+  </footer>
+</div>
+
+<script>{{ chart_js }}</script>
+<script id="dati" type="application/json">{{ dati_json }}</script>
+<script>
+"use strict";
+const D = JSON.parse(document.getElementById("dati").textContent);
+
+/* ---------- formattazione ---------- */
+const NF0 = new Intl.NumberFormat("it-IT", { maximumFractionDigits: 0 });
+const NF1 = new Intl.NumberFormat("it-IT", { maximumFractionDigits: 1 });
+const ASSENTE = "non calcolabile";
+const num = (v, f) => (v === null || v === undefined ? null : (f || NF0).format(v));
+const kg = (v) => (v === null || v === undefined ? null : NF0.format(v) + " kg");
+function dataIt(iso) {
+  if (!iso) return "-";
+  const p = String(iso).slice(0, 10).split("-");
+  return p.length === 3 ? p[2] + "/" + p[1] + "/" + p[0] : iso;
+}
+function settimanaBreve(s) {
+  // "31/08\u2013 06/09/2026" -> "31/08": sull'asse serve il lunedi'
+  return String(s.etichetta || s).split("\u2013")[0].trim();
+}
+function durata(s) {
+  if (!s) return "-";
+  const t = Math.round(s), m = Math.floor(t / 60), sec = t % 60;
+  const h = Math.floor(m / 60);
+  return h ? h + "h" + String(m % 60).padStart(2, "0") : m + "'" + String(sec).padStart(2, "0") + '"';
+}
+const el = (tag, attrs, testo) => {
+  const n = document.createElement(tag);
+  for (const k in (attrs || {})) {
+    if (k === "class") n.className = attrs[k]; else n.setAttribute(k, attrs[k]);
+  }
+  if (testo !== undefined && testo !== null) n.textContent = testo;
+  return n;
+};
+function cella(valore, classe) {
+  const td = el("td", { class: "num " + (classe || "") });
+  if (valore === null || valore === undefined) {
+    td.textContent = "n/d"; td.classList.add("assente");
+  } else { td.textContent = valore; }
+  return td;
+}
+
+/* ---------- tema ---------- */
+const css = (nome) => getComputedStyle(document.documentElement).getPropertyValue(nome).trim();
+function scuro() {
+  const t = document.documentElement.getAttribute("data-theme");
+  if (t) return t === "dark";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+const serie = (i) => (scuro() ? D.palette.scuro : D.palette.chiaro)[i % 8];
+
+/* ---------- chrome comune dei grafici ---------- */
+function opzioni(extra) {
+  const base = {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: "index", intersect: false },
+    plugins: {
+      legend: {
+        display: true,
+        position: "top",
+        align: "end",
+        labels: { boxWidth: 8, boxHeight: 8, usePointStyle: true, pointStyle: "rectRounded",
+                  color: css("--ink-2"), font: { size: 12 }, padding: 14 }
+      },
+      tooltip: {
+        backgroundColor: scuro() ? "#232321" : "#ffffff",
+        titleColor: css("--ink"), bodyColor: css("--ink-2"),
+        borderColor: css("--axis"), borderWidth: 1, padding: 10, cornerRadius: 6,
+        displayColors: true, boxWidth: 8, boxHeight: 8, usePointStyle: true
+      }
+    },
+    scales: {
+      x: {
+        grid: { display: false, drawTicks: false },
+        border: { color: css("--axis") },
+        ticks: { color: css("--muted"), font: { size: 11 }, maxRotation: 0, autoSkipPadding: 12 }
+      },
+      y: {
+        beginAtZero: true,
+        grid: { color: css("--grid"), drawTicks: false },
+        border: { display: false },
+        ticks: { color: css("--muted"), font: { size: 11 },
+                 // con scale piccole NF0 arrotonderebbe tacche diverse allo
+                 // stesso numero: "1, 1, 0, 0, 0"
+                 callback: (v) => (Number.isInteger(v) ? NF0 : NF1).format(v) }
+      }
+    }
+  };
+  return fondi(base, extra || {});
+}
+function fondi(a, b) {
+  const out = Array.isArray(a) ? a.slice() : Object.assign({}, a);
+  for (const k in b) {
+    out[k] = (b[k] && typeof b[k] === "object" && !Array.isArray(b[k]))
+      ? fondi(a[k] || {}, b[k]) : b[k];
+  }
+  return out;
+}
+
+const grafici = {};
+function disegna(id, config) {
+  if (grafici[id]) grafici[id].destroy();
+  const ctx = document.getElementById(id);
+  if (ctx) grafici[id] = new Chart(ctx, config);
+}
+
+/* ---------- intestazione e riepilogo ---------- */
+function testata() {
+  const r = D.riepilogo;
+  document.getElementById("periodo").textContent =
+    r.n_sedute ? dataIt(r.prima_seduta) + " - " + dataIt(r.ultima_seduta) : "nessuna seduta";
+  document.getElementById("generato").textContent =
+    "Generato il " + dataIt(D.generato_il) + " alle " + D.generato_il.slice(11, 16) +
+    " - tutti i dati restano su questo computer.";
+  document.getElementById("finestra").textContent = D.finestra_media_mobile;
+  document.getElementById("maxreps").textContent = D.epley_max_reps;
+
+  const tiles = [
+    { etichetta: "Sedute", valore: num(r.n_sedute), nota: r.sedute_ultime_4_settimane + " nelle ultime 4 settimane" },
+    { etichetta: "Serie attive", valore: num(r.n_serie_attive), nota: "pause escluse" },
+    { etichetta: "Volume totale", valore: kg(r.volume_totale_kg),
+      nota: r.volume_totale_kg === null
+        ? "nessuna serie con peso e ripetizioni"
+        : num(r.serie_con_volume) + " serie su " + num(r.serie_a_carico) + " a carico" },
+    { etichetta: "Tempo sotto tensione", valore: durata(r.tempo_sotto_tensione_s),
+      nota: "su " + durata(r.tempo_attivo_totale_s) + " di seduta" },
+  ];
+  const cont = document.getElementById("tiles");
+  for (const t of tiles) {
+    const d = el("div", { class: "tile" });
+    d.appendChild(el("div", { class: "etichetta" }, t.etichetta));
+    if (t.valore === null) {
+      d.appendChild(el("div", { class: "valore assente" }, ASSENTE));
+    } else {
+      d.appendChild(el("div", { class: "valore" }, t.valore));
+    }
+    d.appendChild(el("div", { class: "nota" }, t.nota));
+    cont.appendChild(d);
+  }
+}
+
+/* ---------- volume settimanale ---------- */
+function volumeSettimanale() {
+  const w = D.settimane;
+  const etichette = w.map(settimanaBreve);
+  disegna("g-volume", {
+    data: {
+      labels: etichette,
+      datasets: [
+        { type: "bar", label: "Volume settimanale", data: w.map((x) => x.volume_kg),
+          backgroundColor: serie(0), borderRadius: 4, borderSkipped: false,
+          barPercentage: 0.62, categoryPercentage: 0.8, maxBarThickness: 46, order: 2 },
+        { type: "line", label: "Media " + D.finestra_media_mobile + " settimane",
+          data: w.map((x) => x.media_mobile_kg),
+          borderColor: serie(1), backgroundColor: serie(1), borderWidth: 2,
+          pointRadius: 3, pointHoverRadius: 5, tension: 0.25, spanGaps: false, order: 1 }
+      ]
+    },
+    options: opzioni({
+      scales: { y: { title: { display: true, text: "kg", color: css("--muted"), font: { size: 11 } } } },
+      plugins: { tooltip: { callbacks: {
+        title: (items) => w[items[0].dataIndex].etichetta,
+        label: (c) => {
+          const riga = w[c.dataIndex];
+          if (c.raw === null || c.raw === undefined) return c.dataset.label + ": " + ASSENTE;
+          return c.dataset.label + ": " + kg(c.raw);
+        },
+        afterBody: (items) => {
+          const riga = w[items[0].dataIndex];
+          const parti = [riga.n_sedute + (riga.n_sedute === 1 ? " seduta" : " sedute"),
+                         riga.n_serie + " serie"];
+          if (riga.n_serie && riga.n_serie_con_volume < riga.n_serie) {
+            parti.push(riga.n_serie_con_volume + " con peso e ripetizioni");
+          }
+          return parti.join(" - ");
+        }
+      } } }
+    })
+  });
+
+  tabella("t-volume",
+    ["Settimana", "Sedute", "Serie", "Serie con volume", "Volume", "Media " + D.finestra_media_mobile + " sett."],
+    w.map((x) => [x.etichetta, num(x.n_sedute), num(x.n_serie), num(x.n_serie_con_volume),
+                  kg(x.volume_kg), kg(x.media_mobile_kg)]));
+}
+
+/* ---------- gruppi muscolari ---------- */
+let misuraGruppi = "serie";
+function gruppiMuscolari() {
+  const g = D.gruppi;
+  const etichette = g.settimane.map(settimanaBreve);
+  const surface = css("--surface");
+  const dati = misuraGruppi === "serie" ? g.serie : g.volume_kg;
+  const datasets = g.nomi.map((nome, i) => ({
+    label: nome === "altri" && g.altri_contiene.length
+      ? "altri (" + g.altri_contiene.join(", ").replace(/_/g, " ") + ")"
+      : nome.replace(/_/g, " "),
+    data: (dati[nome] || []).map((v) => (v === null ? 0 : v)),
+    backgroundColor: serie(i),
+    borderColor: surface, borderWidth: 2,
+    borderRadius: 3, borderSkipped: false,
+    barPercentage: 0.62, categoryPercentage: 0.8, maxBarThickness: 46
+  }));
+  disegna("g-gruppi", {
+    type: "bar",
+    data: { labels: etichette, datasets },
+    options: opzioni({
+      scales: {
+        x: { stacked: true },
+        y: { stacked: true, title: { display: true,
+             text: misuraGruppi === "serie" ? "serie" : "kg",
+             color: css("--muted"), font: { size: 11 } } }
+      },
+      plugins: { tooltip: { callbacks: {
+        title: (items) => g.settimane[items[0].dataIndex].etichetta,
+        label: (c) => {
+          const grezzo = (misuraGruppi === "serie" ? g.serie : g.volume_kg)[g.nomi[c.datasetIndex]][c.dataIndex];
+          if (grezzo === null) return c.dataset.label + ": " + ASSENTE;
+          if (grezzo === 0) return null;
+          return c.dataset.label + ": " + (misuraGruppi === "serie" ? num(grezzo) + " serie" : kg(grezzo));
+        }
+      } } }
+    })
+  });
+
+  const intestazione = ["Settimana"].concat(g.nomi.map((n) => n.replace(/_/g, " ")));
+  const righe = g.settimane.map((s, i) => [s.etichetta].concat(
+    g.nomi.map((n) => {
+      const v = dati[n][i];
+      return v === null ? null : (misuraGruppi === "serie" ? num(v) : kg(v));
+    })));
+  tabella("t-gruppi", intestazione, righe);
+
+  const box = document.getElementById("avviso-gruppi");
+  box.innerHTML = "";
+  if (misuraGruppi === "volume") {
+    const mancanti = g.nomi.filter((n) => g.volume_kg[n].every((v) => v === null));
+    if (mancanti.length) {
+      box.appendChild(avviso("Nessun tonnellaggio per " + mancanti.join(", ").replace(/_/g, " ") +
+        ": in quelle serie manca il peso, oppure il carico e' il corpo o l'assistenza. " +
+        "Usa la vista per serie."));
+    }
+  }
+}
+
+/* ---------- gruppi sotto osservazione ---------- */
+function focus() {
+  const cont = document.getElementById("focus");
+  if (!D.focus.length) { document.getElementById("card-focus").classList.add("nascosto"); return; }
+  const etichette = D.gruppi.settimane.map(settimanaBreve);
+  D.focus.forEach((f) => {
+    const fig = el("figure");
+    fig.appendChild(el("figcaption", {}, f.nome.replace(/_/g, " ")));
+    if (!f.presente) {
+      // Dichiarare l'assenza e' informazione: un grafico vuoto non lo e'.
+      fig.appendChild(avviso("Nessuna serie registrata per questo gruppo nel periodo."));
+      cont.appendChild(fig);
+      return;
+    }
+    const box = el("div", { class: "grafico basso" });
+    box.appendChild(el("canvas", { id: "g-focus-" + f.nome }));
+    fig.appendChild(box); cont.appendChild(fig);
+    disegna("g-focus-" + f.nome, {
+      type: "bar",
+      data: { labels: etichette, datasets: [{
+        label: "serie", data: f.serie, backgroundColor: serie(f.slot),
+        borderRadius: 4, borderSkipped: false, barPercentage: 0.6,
+        categoryPercentage: 0.85, maxBarThickness: 40 }] },
+      options: opzioni({
+        plugins: { legend: { display: false }, tooltip: { callbacks: {
+          title: (items) => D.gruppi.settimane[items[0].dataIndex].etichetta,
+          label: (c) => c.raw + " serie"
+        } } },
+        scales: { y: { ticks: { precision: 0 } } }
+      })
+    });
+  });
+}
+
+/* ---------- progressione per esercizio ---------- */
+function progressione(nome) {
+  const p = D.progressioni[nome];
+  const punti = p.punti;
+  const etichette = punti.map((x) => dataIt(x.local_date));
+  const assistenza = p.weight_mode === "assistenza";
+  const corpoLibero = p.weight_mode === "corpo_libero";
+
+  document.getElementById("cap-carico").textContent =
+    assistenza ? "Assistenza ricevuta ed e1RM sul carico effettivo (kg)"
+               : "Peso migliore ed e1RM stimato (kg)";
+
+  const datasets = [];
+  if (assistenza) {
+    datasets.push({ label: "Assistenza (kg)", data: punti.map((x) => x.assistenza_minima_kg),
+      borderColor: serie(3), backgroundColor: serie(3), borderWidth: 2, tension: 0.2,
+      pointRadius: 4, pointHoverRadius: 6, spanGaps: false });
+  } else {
+    datasets.push({ label: "Peso migliore (kg)", data: punti.map((x) => x.peso_migliore_kg),
+      borderColor: serie(0), backgroundColor: serie(0), borderWidth: 2, tension: 0.2,
+      pointRadius: 4, pointHoverRadius: 6, spanGaps: false });
+  }
+  datasets.push({
+    label: "e1RM (kg)", data: punti.map((x) => x.e1rm_kg),
+    borderColor: serie(1), backgroundColor: serie(1), borderWidth: 2, tension: 0.2,
+    borderDash: [], spanGaps: false,
+    pointRadius: 4, pointHoverRadius: 6,
+    // le stime poco affidabili (oltre le 12 ripetizioni) cambiano forma,
+    // non solo colore: il colore da solo non deve mai portare significato
+    pointStyle: punti.map((x) => (x.e1rm_affidabile === false ? "triangle" : "circle")),
+    pointRadius: punti.map((x) => (x.e1rm_affidabile === false ? 6 : 4))
+  });
+
+  disegna("g-progressione", {
+    type: "line",
+    data: { labels: etichette, datasets },
+    options: opzioni({
+      scales: {
+        // con una sola seduta il punto finirebbe incollato al bordo
+        x: { offset: true },
+        y: { title: { display: true, text: "kg", color: css("--muted"), font: { size: 11 } } }
+      },
+      plugins: { tooltip: { callbacks: {
+        label: (c) => {
+          if (c.raw === null || c.raw === undefined) return c.dataset.label + ": " + ASSENTE;
+          let testo = c.dataset.label + ": " + NF1.format(c.raw) + " kg";
+          if (c.dataset.label.startsWith("e1RM") && punti[c.dataIndex].e1rm_affidabile === false) {
+            testo += "  (stima poco affidabile: oltre " + D.epley_max_reps + " ripetizioni)";
+          }
+          return testo;
+        },
+        afterBody: (items) => {
+          const x = punti[items[0].dataIndex];
+          return x.n_serie + " serie - " + x.reps_totali + " ripetizioni totali";
+        }
+      } } }
+    })
+  });
+
+  disegna("g-reps", {
+    type: "bar",
+    data: { labels: etichette, datasets: [{ label: "Ripetizioni totali",
+      data: punti.map((x) => x.reps_totali), backgroundColor: serie(2),
+      borderRadius: 4, borderSkipped: false, barPercentage: 0.6,
+      categoryPercentage: 0.8, maxBarThickness: 46 }] },
+    options: opzioni({
+      plugins: { legend: { display: false } },
+      scales: { y: { ticks: { precision: 0 } } }
+    })
+  });
+
+  const box = document.getElementById("avviso-esercizio");
+  box.innerHTML = "";
+  if (assistenza) {
+    box.appendChild(avviso("Il peso registrato e' l'aiuto della macchina, non il carico: " +
+      "qui il progresso e' l'assistenza che cala. L'e1RM e' stimato sul peso corporeo meno " +
+      "l'assistenza e non entra nel tonnellaggio."));
+  } else if (corpoLibero) {
+    box.appendChild(avviso("Esercizio a corpo libero: non c'e' carico esterno, " +
+      "quindi niente tonnellaggio. Restano ripetizioni e tempo sotto tensione."));
+  }
+  if (punti.some((x) => x.e1rm_affidabile === false)) {
+    box.appendChild(avviso("I punti a triangolo sono stime su serie oltre le " +
+      D.epley_max_reps + " ripetizioni: la formula di Epley li sovrastima."));
+  }
+
+  const intestazione = ["Data", "Serie", "Rip. totali",
+    assistenza ? "Assistenza min." : "Peso migliore", "Carico effettivo", "e1RM", "Volume"];
+  tabella("t-progressione", intestazione, punti.map((x) => [
+    dataIt(x.local_date), num(x.n_serie), num(x.reps_totali),
+    kg(assistenza ? x.assistenza_minima_kg : x.peso_migliore_kg),
+    x.carico_effettivo_migliore_kg === null ? null
+      : NF1.format(x.carico_effettivo_migliore_kg) + " kg" + (p.carico_stimato ? " (stima)" : ""),
+    x.e1rm_kg === null ? null : NF1.format(x.e1rm_kg) + " kg" + (x.e1rm_affidabile === false ? " *" : ""),
+    kg(x.volume_kg)
+  ]));
+}
+
+function selettoreEsercizi() {
+  const sel = document.getElementById("sel-esercizio");
+  D.esercizi.forEach((e) => {
+    sel.appendChild(el("option", { value: e.nome },
+      e.nome + "  (" + e.n_serie + " serie, " + e.n_sedute + (e.n_sedute === 1 ? " seduta)" : " sedute)")));
+  });
+  sel.addEventListener("change", () => aggiornaEsercizio(sel.value));
+  if (D.esercizi.length) aggiornaEsercizio(D.esercizi[0].nome);
+}
+function aggiornaEsercizio(nome) {
+  const e = D.esercizi.find((x) => x.nome === nome);
+  document.getElementById("info-esercizio").textContent =
+    e && e.gruppo ? e.gruppo.replace(/_/g, " ") : "gruppo muscolare non mappato";
+  progressione(nome);
+}
+
+/* ---------- tabelle ---------- */
+function tabella(idContenitore, intestazione, righe) {
+  const cont = document.getElementById(idContenitore);
+  cont.innerHTML = "";
+  const t = el("table");
+  const thead = el("thead"), tr = el("tr");
+  intestazione.forEach((h, i) => tr.appendChild(el("th", { class: i === 0 ? "testo" : "" }, h)));
+  thead.appendChild(tr); t.appendChild(thead);
+  const tbody = el("tbody");
+  righe.forEach((r) => {
+    const riga = el("tr");
+    r.forEach((v, i) => {
+      if (i === 0) riga.appendChild(el("td", { class: "testo" }, v));
+      else riga.appendChild(cella(v));
+    });
+    tbody.appendChild(riga);
+  });
+  t.appendChild(tbody); cont.appendChild(t);
+}
+
+function tabellaSedute() {
+  const cont = document.getElementById("t-sedute");
+  const t = el("table");
+  const thead = el("thead"), tr = el("tr");
+  ["Data", "Allenamento", "Serie", "Volume", "Densita'", "Lavoro/riposo",
+   "FC media", "Deriva FC"].forEach((h, i) =>
+    tr.appendChild(el("th", { class: i < 2 ? "testo" : "" }, h)));
+  thead.appendChild(tr); t.appendChild(thead);
+  const tbody = el("tbody");
+
+  D.sedute.forEach((s, i) => {
+    const riga = el("tr", { class: "seduta", tabindex: "0", role: "button",
+                            "aria-expanded": "false", "aria-controls": "dett-" + i });
+    riga.appendChild(el("td", { class: "testo" }, "▸ " + dataIt(s.local_date)));
+    riga.appendChild(el("td", { class: "testo" }, s.workout_name || "-"));
+    riga.appendChild(cella(num(s.n_serie)));
+    riga.appendChild(cella(kg(s.volume_kg)));
+    riga.appendChild(cella(s.densita_kg_min === null ? null : NF1.format(s.densita_kg_min) + " kg/min"));
+    riga.appendChild(cella(s.rapporto_lavoro_riposo === null ? null : NF1.format(s.rapporto_lavoro_riposo)));
+    riga.appendChild(cella(s.avg_hr === null ? null : NF1.format(s.avg_hr) + " bpm"));
+    riga.appendChild(cella(s.fc_deriva_bpm === null ? null
+      : (s.fc_deriva_bpm > 0 ? "+" : "") + NF1.format(s.fc_deriva_bpm) + " bpm"));
+    tbody.appendChild(riga);
+
+    const dett = el("tr", { class: "dettaglio nascosto", id: "dett-" + i });
+    const td = el("td", { class: "contenitore", colspan: "8" });
+    td.appendChild(dettaglioSerie(s));
+    dett.appendChild(td); tbody.appendChild(dett);
+
+    const apri = () => {
+      const chiuso = dett.classList.toggle("nascosto");
+      riga.setAttribute("aria-expanded", chiuso ? "false" : "true");
+      riga.firstChild.textContent = (chiuso ? "▸ " : "▾ ") + dataIt(s.local_date);
+    };
+    riga.addEventListener("click", apri);
+    riga.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); apri(); }
+    });
+  });
+  t.appendChild(tbody); cont.innerHTML = ""; cont.appendChild(t);
+}
+
+function dettaglioSerie(seduta) {
+  const t = el("table");
+  const thead = el("thead"), tr = el("tr");
+  ["#", "Esercizio", "Gruppo", "Tipo", "Durata", "Rip.", "Peso", "Volume", "FC media", "Fonte"]
+    .forEach((h, i) => tr.appendChild(el("th", { class: i < 4 ? "testo" : "" }, h)));
+  thead.appendChild(tr); t.appendChild(thead);
+  const tbody = el("tbody");
+  let n = 0;
+  seduta.serie.forEach((s) => {
+    const attiva = s.set_type === "active";
+    if (attiva) n += 1;
+    const riga = el("tr");
+    riga.appendChild(el("td", { class: "testo num" }, attiva ? String(n) : ""));
+    const nome = el("td", { class: "testo" });
+    nome.textContent = attiva ? (s.exercise_name || s.raw_exercise_key || "?") : "riposo";
+    if (attiva && s.unmapped) {
+      nome.appendChild(document.createTextNode(" "));
+      nome.appendChild(el("span", { class: "tag" }, "non mappato"));
+    }
+    riga.appendChild(nome);
+    riga.appendChild(el("td", { class: "testo" }, attiva ? (s.muscle_group || "-").replace(/_/g, " ") : ""));
+    riga.appendChild(el("td", { class: "testo" }, attiva ? "serie" : "pausa"));
+    riga.appendChild(cella(durata(s.duration_s)));
+    riga.appendChild(cella(attiva ? num(s.reps) : ""));
+    const peso = el("td", { class: "num" });
+    if (!attiva) { peso.textContent = ""; }
+    else if (s.weight_kg === null) {
+      peso.textContent = s.weight_mode === "corpo_libero" ? "corpo libero" : "n/d";
+      peso.classList.add("assente");
+    } else {
+      peso.textContent = NF1.format(s.weight_kg) + " kg";
+      if (s.weight_mode === "assistenza") {
+        peso.appendChild(document.createTextNode(" "));
+        peso.appendChild(el("span", { class: "tag stima" }, "assistenza"));
+      }
+    }
+    riga.appendChild(peso);
+    riga.appendChild(cella(attiva ? kg(s.volume_kg) : ""));
+    riga.appendChild(cella(
+      s.avg_bpm === null || s.avg_bpm === undefined ? null : NF1.format(s.avg_bpm) + " bpm"));
+    const fonte = el("td", { class: "num" });
+    if (attiva) {
+      fonte.appendChild(el("span", { class: "tag" + (s.data_source === "correzione" ? " corretto" : "") },
+        s.data_source === "correzione" ? "correzione" : "file"));
+    }
+    riga.appendChild(fonte);
+    tbody.appendChild(riga);
+  });
+  t.appendChild(tbody);
+  return t;
+}
+
+/* ---------- anomalie ---------- */
+function avviso(testo) {
+  const d = el("div", { class: "avviso" });
+  d.appendChild(el("span", { class: "icona" }, "!"));
+  d.appendChild(el("span", {}, testo));
+  return d;
+}
+
+function anomalie() {
+  const cont = document.getElementById("anomalie");
+  const sezioni = [
+    ["esercizi_non_mappati", "Esercizi non mappati",
+     ["Chiave grezza", "Nota dello step", "Etichetta Garmin", "Serie"],
+     (r) => [r.raw_key, r.nota || "-", r.etichetta || "-", num(r.n_serie)],
+     "Aggiungili a config/exercise_mapping.yaml: finche' restano qui non entrano in nessun gruppo muscolare."],
+    ["serie_peso_zero", "Serie con peso zero",
+     ["Data", "Esercizio", "Rip.", "Durata"],
+     (r) => [dataIt(r.local_date), r.exercise_name || "?", num(r.reps), durata(r.duration_s)],
+     "Zero e' un valore, non un dato mancante: se erano a corpo libero conviene segnarle come tali nella mappatura."],
+    ["serie_reps_sospette", "Serie con ripetizioni sospette",
+     ["Data", "Esercizio", "Rip.", "Peso", "Motivo"],
+     (r) => [dataIt(r.local_date), r.exercise_name || "?", num(r.reps), kg(r.weight_kg), r.motivo],
+     "Il contatore dell'orologio a volte non vede il movimento. Si correggono con  strength-tracker correct."],
+    ["serie_durata_anomala", "Serie di durata anomala",
+     ["Data", "Esercizio", "Rip.", "Durata"],
+     (r) => [dataIt(r.local_date), r.exercise_name || "?", num(r.reps), durata(r.duration_s)],
+     "Oltre i cinque minuti: di solito l'orologio e' rimasto su quello step."],
+    ["sedute_senza_ripetizioni", "Sedute senza alcuna ripetizione registrata",
+     ["Data", "Serie"],
+     (r) => [dataIt(r.local_date), num(r.n_serie)],
+     "Nessun tonnellaggio calcolabile: i valori vanno confermati sull'orologio, o inseriti con  correct --from-csv."]
+  ];
+  let totale = 0;
+  sezioni.forEach(([chiave, titolo, intestazione, mappa, spiegazione]) => {
+    const righe = D.anomalie[chiave] || [];
+    totale += righe.length;
+    const box = el("div", { class: "anomalia" });
+    const h = el("h3");
+    h.appendChild(el("span", { class: "pallino",
+      style: "background:" + (righe.length ? "var(--warn)" : "var(--ok)") }));
+    h.appendChild(el("span", {}, titolo));
+    h.appendChild(el("span", { class: "conta" }, righe.length ? "(" + righe.length + ")" : "(nessuna)"));
+    box.appendChild(h);
+    if (righe.length) {
+      const id = "anom-" + chiave;
+      box.appendChild(el("div", { class: "scroll-x", id: id }));
+      cont.appendChild(box);
+      tabella(id, intestazione, righe.map(mappa));
+      box.appendChild(el("p", { class: "vuoto", style: "margin:6px 0 0" }, spiegazione));
+    } else {
+      cont.appendChild(box);
+    }
+  });
+  if (!totale) {
+    cont.insertBefore(el("p", { class: "vuoto" }, "Nessuna anomalia: i dati sono coerenti."), cont.firstChild);
+  }
+}
+
+/* ---------- interazioni ---------- */
+function collegaControlli() {
+  document.querySelectorAll("[data-tabella]").forEach((b) => {
+    b.addEventListener("click", () => {
+      const t = document.getElementById(b.dataset.tabella);
+      const nascosta = t.classList.toggle("nascosto");
+      b.textContent = nascosta ? "Mostra tabella" : "Nascondi tabella";
+    });
+  });
+  document.querySelectorAll("[data-misura]").forEach((b) => {
+    b.addEventListener("click", () => {
+      misuraGruppi = b.dataset.misura;
+      document.querySelectorAll("[data-misura]").forEach((x) =>
+        x.setAttribute("aria-pressed", String(x === b)));
+      gruppiMuscolari();
+    });
+  });
+
+  const bottone = document.getElementById("tema");
+  const cicla = () => {
+    const attuale = document.documentElement.getAttribute("data-theme");
+    const prossimo = attuale === "dark" ? "light" : attuale === "light" ? null : "dark";
+    if (prossimo) document.documentElement.setAttribute("data-theme", prossimo);
+    else document.documentElement.removeAttribute("data-theme");
+    bottone.textContent = "Tema: " + (prossimo || "auto");
+    ridisegna();
+  };
+  bottone.addEventListener("click", cicla);
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if (!document.documentElement.getAttribute("data-theme")) ridisegna();
+  });
+}
+
+function ridisegna() {
+  volumeSettimanale();
+  gruppiMuscolari();
+  D.focus.filter((f) => f.presente).forEach((f) => {
+    const c = grafici["g-focus-" + f.nome];
+    if (c) {
+      c.data.datasets[0].backgroundColor = serie(f.slot);
+      c.options = fondi(c.options, opzioni({ plugins: { legend: { display: false } } }));
+      c.update();
+    }
+  });
+  const sel = document.getElementById("sel-esercizio");
+  if (sel && sel.value) progressione(sel.value);
+}
+
+/* ---------- avvio ---------- */
+testata();
+if (D.riepilogo.n_sedute) {
+  volumeSettimanale();
+  gruppiMuscolari();
+  focus();
+  selettoreEsercizi();
+  tabellaSedute();
+}
+anomalie();
+collegaControlli();
+</script>
+</body>
+</html>

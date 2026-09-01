@@ -16,6 +16,7 @@ modificati ne' spostati.
 ## Stato dei lavori
 
 Il progetto procede per fasi, con una verifica alla fine di ognuna.
+Tutte e cinque sono complete: `ingest` + `report` è il flusso del dopo-allenamento.
 
 | Fase | Contenuto | Stato |
 | --- | --- | --- |
@@ -23,7 +24,7 @@ Il progetto procede per fasi, con una verifica alla fine di ognuna.
 | 2 | Parser FIT + test + dump JSON di ispezione | ✅ fatto |
 | 3 | Schema SQLite, ingestione idempotente, mappatura, correzioni | ✅ fatto |
 | 4 | Metriche (volume, e1RM, densità, deriva FC) | ✅ fatto |
-| 5 | Dashboard HTML | ⬜ |
+| 5 | Dashboard HTML | ✅ fatto |
 
 I comandi non ancora implementati escono con codice `1` e lo dicono: non
 fingono di aver lavorato.
@@ -256,6 +257,49 @@ La colonna `seduta` serve solo quando in quel giorno c'è più di un
 allenamento. In `examples/` c'è la seduta "Day 1 Upper Body" del 01/09/2026
 già trascritta. Finiscono tutte in `corrections`: i dati grezzi restano
 intatti e `data_source` dice da dove viene ogni valore.
+
+## La dashboard
+
+```bash
+strength-tracker report        # genera output/dashboard.html
+make session FIT=~/Downloads/palestra   # ingest + report in un colpo
+```
+
+Un **unico file HTML** in `output/dashboard.html`: Chart.js è inserito inline
+dal repo e i dati sono un blocco JSON dentro la pagina. Zero richieste di rete,
+zero server — si apre con doppio click, anche in aereo. Nessun tag `src` o
+`href` verso l'esterno, e c'è un test che lo verifica.
+
+Cosa contiene:
+
+- **Riepilogo**: sedute, periodo, volume totale (con quante serie lo
+  sostengono), tempo sotto tensione, sedute nelle ultime 4 settimane.
+- **Volume settimanale** con media mobile a 4 settimane.
+- **Carico per gruppo muscolare** a settimana, barre impilate, con selettore
+  serie / tonnellaggio: le serie restano leggibili anche dove il carico non è
+  misurabile.
+- **Gruppi sotto osservazione** (hamstring, adduttori, glutei): ci sono sempre
+  tutti e tre, e se un gruppo non è stato allenato la pagina lo **scrive**
+  invece di mostrare un grafico vuoto.
+- **Progressione per esercizio** con selettore: peso migliore ed e1RM sullo
+  stesso asse (sono entrambi kg), ripetizioni totali in un grafico a parte —
+  mai due scale sullo stesso grafico. Per le trazioni assistite mostra
+  l'assistenza al posto del peso, e lo dice.
+- **Ultime sedute** espandibili serie per serie: numerazione identica a quella
+  di Garmin Connect, FC media della singola serie, e un tag che dice se il
+  valore viene dal file o da una correzione.
+- **Anomalie**: esercizi non mappati, serie con peso zero, ripetizioni
+  sospette, serie di durata anomala, sedute senza ripetizioni. Ognuna con una
+  riga che spiega cosa farci.
+- **Note di metodo** in fondo: le assunzioni di ogni formula, sulla pagina e
+  non solo qui.
+
+Dettagli di resa: tema chiaro e scuro (segue il sistema, con interruttore in
+alto a destra), palette categorica a 8 slot in ordine fisso — l'ordine è quello
+che la rende leggibile ai daltonismi, non una scelta estetica — e oltre l'ottavo
+gruppo i più piccoli confluiscono in "altri", che dichiara cosa contiene. Ogni
+grafico ha la sua tabella, e le stime poco affidabili (e1RM oltre le 12
+ripetizioni) cambiano **forma** del punto, non solo colore.
 
 ## Installazione
 

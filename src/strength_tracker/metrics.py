@@ -242,11 +242,15 @@ def esercizi_disponibili(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                   MAX(weight_mode) AS weight_mode,
                   COUNT(*) AS n_serie,
                   COUNT(DISTINCT session_id) AS n_sedute,
+                  COUNT(weight_kg) AS n_con_peso,
+                  COALESCE(SUM(volume_kg), 0) AS volume_kg,
                   MAX(muscle_group) AS gruppo
            FROM v_sets
            WHERE set_type = 'active' AND exercise_name IS NOT NULL
            GROUP BY exercise_name
-           ORDER BY n_serie DESC, nome""",
+           -- Prima gli esercizi su cui la progressione ha qualcosa da dire:
+           -- uno di loro e' il default del selettore.
+           ORDER BY volume_kg DESC, (n_con_peso > 0) DESC, n_serie DESC, nome""",
     )
 
 

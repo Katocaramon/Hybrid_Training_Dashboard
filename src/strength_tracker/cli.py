@@ -22,23 +22,6 @@ from . import (
     default_output_path,
 )
 
-# Fase in cui ciascun comando viene implementato: finche' non e' pronto il
-# comando esce con codice 1 e lo dice, invece di fingere di aver lavorato.
-_PHASE = {
-    "report": "5 (dashboard)",
-}
-
-
-def _todo(command: str) -> int:
-    print(
-        f"[strength-tracker] '{command}' non e' ancora implementato "
-        f"(previsto nella Fase {_PHASE[command]}).",
-        file=sys.stderr,
-    )
-    return 1
-
-
-
 def _open_db(args: argparse.Namespace):
     from . import db
 
@@ -230,6 +213,25 @@ def _durata(secondi: float | None) -> str:
 
 def _kg(v: float | None, suffisso: str = " kg") -> str:
     return "n/d" if v is None else f"{v:,.0f}{suffisso}".replace(",", ".")
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    """Genera la dashboard HTML."""
+    from . import dashboard
+    from .mapping import load_mapping
+
+    conn = _open_db(args)
+    _load_mapping_into(conn, args)
+    mapping = load_mapping(getattr(args, "mapping", None) or default_mapping_path())
+    percorso = dashboard.genera(conn, mapping, args.output or default_output_path())
+    print(f"Dashboard generata: {percorso}  ({percorso.stat().st_size / 1024:.0f} KB)")
+    if not conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]:
+        print(
+            "[strength-tracker] il database e' vuoto: la dashboard non ha dati da mostrare.",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
 
 
 def cmd_stats(args: argparse.Namespace) -> int:
@@ -467,7 +469,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help=f"mappatura esercizi (default: {default_mapping_path()})",
     )
-    p_report.set_defaults(func=lambda args: _todo("report"))
+    p_report.set_defaults(func=cmd_report)
 
     p_stats = sub.add_parser("stats", help="riepilogo testuale rapido nel terminale")
     p_stats.add_argument(
