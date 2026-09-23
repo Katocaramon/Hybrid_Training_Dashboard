@@ -246,7 +246,10 @@ def cmd_stats(args: argparse.Namespace) -> int:
         return 1
 
     print("RIEPILOGO")
-    print(f"  Sedute                {r['n_sedute']}")
+    sorgenti = ", ".join(
+        f"{n} {nome}" for nome, n in sorted(r["sedute_per_sorgente"].items()) if n
+    )
+    print(f"  Sedute                {r['n_sedute']}  ({sorgenti})")
     print(
         f"  Periodo               {_data_it(r['prima_seduta'])} - {_data_it(r['ultima_seduta'])}"
     )
@@ -282,6 +285,8 @@ def cmd_stats(args: argparse.Namespace) -> int:
     print("\nULTIME SEDUTE")
     for s in mt.sedute(conn)[:8]:
         densita = "n/d" if s["densita_kg_min"] is None else f"{s['densita_kg_min']} kg/min"
+        if s["densita_base"] == "tempo totale":
+            densita += "*"
         deriva = "n/d" if s["fc_deriva_bpm"] is None else f"{s['fc_deriva_bpm']:+g} bpm"
         nome = (s["workout_name"] or "-")[:22]
         print(
@@ -289,11 +294,14 @@ def cmd_stats(args: argparse.Namespace) -> int:
             f"vol {_kg(s['volume_kg'])}  dens {densita}  "
             f"L/R {s['rapporto_lavoro_riposo'] or 'n/d'}  deriva FC {deriva}"
         )
+    if any(s["densita_base"] == "tempo totale" for s in mt.sedute(conn)[:8]):
+        print("  * densita' sul tempo totale: Hevy non registra il tempo attivo")
 
     a = mt.anomalie(conn)
     totale = sum(len(v) for v in a.values())
     print(f"\nANOMALIE ({totale})")
     etichette = {
+        "sedute_doppie": "sedute registrate da due sorgenti (volume contato due volte)",
         "esercizi_non_mappati": "esercizi non mappati",
         "serie_peso_zero": "serie con peso zero",
         "serie_reps_sospette": "serie con ripetizioni sospette",

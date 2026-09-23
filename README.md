@@ -2,9 +2,15 @@
 
 ***English** · [Italiano](README.it.md)*
 
-A local tool for analysing **strength** sessions recorded on a Garmin Epix Pro
-Gen 2 and exported as `.fit`. Reps and loads are entered by hand on the watch
-during the session, so the files already carry set-level data.
+A local tool for analysing **strength** sessions, from two sources:
+
+- `.fit` files from a Garmin Epix Pro Gen 2 — sets, loads, heart rate at 1 Hz,
+  and the timing of every set and rest;
+- **Hevy** CSV exports — reliable sets and loads, because you type them into the
+  app yourself, but no heart rate and no per-set timing.
+
+One command for both, one database, one dashboard. An exercise mapped on both
+sources keeps **a single history** even when you switch tracking tools.
 
 This is not a bodybuilding app. The point is to tell whether the gym work is
 actually building strength **without interfering with running load**, with
@@ -50,9 +56,13 @@ documented further down.
 The repo has a single branch, `claude/strength-tracker-garmin-fit-hmc1px`, and
 it is already the default: `git clone` gives you exactly that.
 
-### 2. After each session: get the `.fit` file
+### 2. After each session: get the file
 
-Two routes, same file.
+**From Hevy.** Export your data from the profile settings: you get a CSV with
+**your entire history**. No need to trim it — re-importing the full export
+duplicates nothing, only new workouts go in.
+
+**From the Garmin**, if you also want heart rate. Two routes, same file.
 
 **From Garmin Connect (web).** Open the activity → gear icon, top right →
 **"Export Original"**. You get a zip containing `<id>_ACTIVITY.fit`.
@@ -68,8 +78,8 @@ device serial plus creation time, so ingestion stays idempotent either way.
 
 ### 3. Every time: two commands
 
-Drop the `.fit` files (any number, subdirectories included) into `data/fit/`
-and run:
+Drop the files — `.fit`, Hevy `.csv`, mixed together, subdirectories included —
+into `data/fit/` and run:
 
 ```bash
 make session
@@ -114,6 +124,50 @@ marks which values came from the file and which from you.
 | Database | `data/strength.db` | no, ignored |
 | Dashboard | `output/dashboard.html` | no, ignored |
 | Exercise mapping | `config/exercise_mapping.yaml` | yes, versioned |
+
+## The two sources
+
+`ingest` detects the format from the extension and fills the same tables. A Hevy
+CSV contains every workout, so a single file can produce many sessions.
+
+| | Garmin `.fit` | Hevy `.csv` |
+| --- | --- | --- |
+| Sets, reps, loads | only if confirmed on the watch | **always** |
+| Heart rate | 1 Hz for the whole session | absent |
+| Per-set time and duration | yes | absent |
+| Rest durations | yes | absent |
+| Active time | `total_timer_time` | absent (only start–end) |
+| Time zone | from the device | absent: local time with no offset |
+| Exercise name | numeric catalogue index | plain text |
+
+What's missing is **never estimated**: for Hevy sessions HR drift and the
+work/rest ratio stay `NULL`, and density is computed on total time rather than
+active time, saying so (`densita_base`).
+
+### One exercise, two keys
+
+Hevy raw keys are `hevy:<exercise name>`, so they can't be confused with Garmin
+catalogue slugs. Putting them in the **same mapping entry** is what keeps an
+exercise's history continuous across the switch:
+
+```yaml
+  - name: Dumbbell bench press
+    primary: petto
+    match:
+      - bench_press/dumbbell_bench_press     # from the watch
+      - "hevy:Bench Press (Dumbbell)"        # from Hevy
+```
+
+One caveat: Hevy has **no step notes**, so the trick that separates a Copenhagen
+plank from a side plank doesn't apply there. On Hevy, pick a distinct exercise
+entry and map that instead.
+
+### The same session logged twice
+
+If you log a session on the watch *and* in Hevy, tonnage gets counted twice.
+The tool doesn't pick for you: it notices — sessions from different sources
+overlapping on the same day — and flags it under anomalies. Deleting one, or
+dropping one of the two imports, is your call.
 
 ## What a strength FIT file actually contains
 
@@ -187,8 +241,8 @@ Four data tables plus two housekeeping ones, no ORM:
 
 | Table | Contents |
 | --- | --- |
-| `sessions` | one row per activity: unique `session_uid`, local date, ISO week, duration, active time, avg/max HR, calories, device, source file, ingestion time |
-| `sets` | one row per set **and** per rest (`set_type`), raw file data only |
+| `sessions` | one row per activity: unique `session_uid`, `source` (`garmin` or `hevy`), local date, ISO week, duration, active time, avg/max HR, calories, device, source file, ingestion time |
+| `sets` | one row per set **and** per rest (`set_type`), raw file data only; Hevy also brings `rpe`, `superset_id` and `set_kind` |
 | `hr_samples` | heart rate at 1 Hz, keyed by `(session_id, ts_utc)` |
 | `corrections` | manual overrides, append-only |
 | `exercise_map` | projection of the mapping YAML, rewritten on every command |
@@ -292,8 +346,8 @@ applied. Every assumption is written down here rather than buried in the code.
 | --- | --- | --- |
 | **Tonnage** | Σ (weight × reps) | Only sets with `weight_mode = carico`. If reps or weight is missing the set doesn't contribute and is counted separately: `NULL`, never zero |
 | **e1RM** | Epley: weight × (1 + reps / 30) | A linear estimate calibrated on short sets. Above **12 reps** it is flagged unreliable. At 1 rep the formula would give 1.033× the weight, so that case returns the weight itself |
-| **Density** | tonnage / active time | Active time = `session.total_timer_time`, the only one the watch provides |
-| **Work/rest** | Σ active set duration / Σ rest duration | From the `set` messages. Unrecorded rests are not estimated |
+| **Density** | tonnage / active time | Active time = `session.total_timer_time`. Hevy has none, so total time is used and the row declares it in `densita_base` |
+| **Work/rest** | Σ active set duration / Σ rest duration | From the `set` messages. Unrecorded rests are not estimated, and Hevy carries none at all: `NULL` for those sessions |
 | **HR drift** | avg HR of the last third of sets − the first third | A crude fatigue proxy: it also rises simply because the session warms you up. Needs ≥3 sets with HR, otherwise `NULL` |
 | **Sets per group** | count of active sets per ISO week | More robust than tonnage when exercises change or load isn't measurable |
 | **Moving average** | 4-week mean of weekly volume | Computed **only over weeks that have data**: a week without training isn't worth zero, or the average would collapse for no reason |

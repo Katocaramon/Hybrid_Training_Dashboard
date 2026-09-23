@@ -17,7 +17,11 @@
 #
 # Le chiavi grezze sono quelle che stampa `strength-tracker unmapped`:
 # `categoria/nome` risolti dal catalogo FIT (`deadlift/trap_bar_deadlift`),
-# oppure numeri grezzi quando il catalogo non li conosce (`250/7`).
+# numeri grezzi quando il catalogo non li conosce (`250/7`), oppure
+# `hevy:<nome esercizio>` per le sedute importate da Hevy.
+#
+# Tenere le chiavi Garmin e Hevy nella STESSA voce e' quello che rende
+# continua la storia di un esercizio quando cambi strumento di tracciamento.
 # Un esercizio puo' averne piu' d'una: l'orologio a volte cambia voce fra
 # una seduta e l'altra.
 #
@@ -166,17 +170,24 @@ exercises:
   - name: Dumbbell bench press
     primary: petto
     secondary: [tricipiti, spalle]
-    match: [bench_press/dumbbell_bench_press]
+    match:
+      - bench_press/dumbbell_bench_press
+      - "hevy:Bench Press (Dumbbell)"
 
-  - name: Seated dumbbell shoulder press
+  - name: Shoulder press con manubri
     primary: spalle
     secondary: [tricipiti]
-    match: [shoulder_press/seated_dumbbell_shoulder_press]
+    match:
+      - shoulder_press/seated_dumbbell_shoulder_press
+      - "hevy:Shoulder Press (Dumbbell)"
 
-  - name: Wide-grip lat pulldown
+  - name: Lat pulldown
     primary: dorsali
     secondary: [bicipiti]
-    match: [pull_up/wide_grip_lat_pulldown]
+    match:
+      - pull_up/wide_grip_lat_pulldown
+      - pull_up/lat_pulldown
+      - "hevy:Lat Pulldown (Cable)"
 
   - name: Single-arm dumbbell row
     primary: dorsali
@@ -186,12 +197,17 @@ exercises:
   - name: Face pull
     primary: spalle
     secondary: [dorsali]
-    match: [row/face_pull]
+    match:
+      - row/face_pull
+      - "hevy:Face Pull"
 
   - name: Banded pull apart
     primary: spalle
     secondary: [dorsali]
-    match: [banded_exercises/pull_apart]
+    weight_mode: corpo_libero
+    match:
+      - banded_exercises/pull_apart
+      - "hevy:Band Pullaparts"
 
   - name: Band external rotation
     primary: cuffia_rotatori
@@ -201,13 +217,17 @@ exercises:
   - name: Cable core press
     primary: core
     secondary: []
-    match: [core/cable_core_press]
+    match:
+      - core/cable_core_press
+      - "hevy:Cable Core Pallof Press"
 
   - name: Dead bug
     primary: core
     secondary: []
     weight_mode: corpo_libero
-    match: [hip_stability/dead_bug]
+    match:
+      - hip_stability/dead_bug
+      - "hevy:Dead Bug"
 
   - name: Side plank
     primary: core
@@ -215,12 +235,40 @@ exercises:
     weight_mode: corpo_libero
     # senza nota: plank laterale vero. Con nota "Copenhagen plank" vince
     # invece la voce qualificata piu' sopra.
-    match: [plank/side_plank]
+    # Attenzione: su Hevy la nota dello step non esiste. Se il Copenhagen lo
+    # registri come "Side Plank" finisce qui; meglio scegliere su Hevy una
+    # voce distinta (es. "Copenhagen Plank") e mapparla piu' sopra.
+    match:
+      - plank/side_plank
+      - "hevy:Side Plank"
 
   - name: Cardio
     primary: cardio
     secondary: []
-    match: [cardio]
+    weight_mode: corpo_libero
+    match:
+      - cardio
+      - "hevy:Rowing Machine"
+
+  # ---- esercizi visti solo su Hevy ----------------------------------------
+
+  - name: Chin-up
+    primary: dorsali
+    secondary: [bicipiti]
+    # Senza assistenza: e' l'evoluzione delle trazioni assistite, e va tenuto
+    # separato perche' il carico non e' confrontabile.
+    weight_mode: corpo_libero
+    match: ["hevy:Chin Up"]
+
+  - name: Seated row
+    primary: dorsali
+    secondary: [bicipiti]
+    match: ["hevy:Seated Row (Machine)"]
+
+  - name: Hammer curl
+    primary: bicipiti
+    secondary: []
+    match: ["hevy:Hammer Curl (Cable)"]
 
 # Gruppi sotto osservazione speciale in dashboard: sono quelli a rischio di
 # interferenza con il carico di corsa.

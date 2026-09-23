@@ -53,6 +53,9 @@ log = logging.getLogger(__name__)
 #: Estensioni considerate file FIT durante la scansione ricorsiva.
 FIT_SUFFIXES = {".fit"}
 
+#: Estensioni di tutte le sorgenti riconosciute (.fit dall'orologio, .csv da Hevy).
+SOURCE_SUFFIXES = FIT_SUFFIXES | {".csv"}
+
 #: Nome file dell'export Garmin Connect: `<activity_id>_ACTIVITY.fit`.
 _ACTIVITY_ID_RE = re.compile(r"(\d{6,})[_-]?ACTIVITY", re.IGNORECASE)
 
@@ -104,6 +107,11 @@ class SetRecord:
     planned_reps: int | None = None
     planned_weight_kg: float | None = None
     step_note: str | None = None
+    # Campi che arrivano dagli export Hevy e che il FIT non ha.
+    rpe: float | None = None
+    superset_id: str | None = None
+    set_kind: str | None = None  # normal / warmup / dropset / failure
+    distance_km: float | None = None
 
     @property
     def is_active(self) -> bool:
@@ -144,6 +152,8 @@ class SessionRecord:
     total_training_effect: float | None
     utc_offset_s: int | None
     body_weight_kg: float | None = None
+    #: 'garmin' (file .fit) oppure 'hevy' (export CSV).
+    source: str = "garmin"
 
     @property
     def start_time_local(self) -> datetime | None:
@@ -175,6 +185,9 @@ class ParsedActivity:
     exercise_titles: list[ExerciseTitle] = field(default_factory=list)
     workout_steps: list[WorkoutStep] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    #: Alcune sorgenti sanno gia' come si chiama la seduta (Hevy: titolo e
+    #: ora di inizio). In quel caso l'uid non va dedotto.
+    uid_override: str | None = None
 
     @property
     def session_uid(self) -> str:
@@ -185,6 +198,8 @@ class ParsedActivity:
         il file viene riesportato e i byte cambiano), infine hash del
         contenuto.
         """
+        if self.uid_override:
+            return self.uid_override
         if self.garmin_activity_id:
             return f"garmin:{self.garmin_activity_id}"
         if self.device.serial_number and self.device.time_created:
@@ -212,10 +227,16 @@ def sha256_file(path: Path, chunk: int = 1 << 20) -> str:
 
 def iter_fit_files(root: Path) -> list[Path]:
     """File .fit sotto `root` (file singolo o cartella, ricorsiva), ordinati."""
+    return iter_source_files(root, FIT_SUFFIXES)
+
+
+def iter_source_files(root: Path, suffissi: set[str] | None = None) -> list[Path]:
+    """Sorgenti sotto `root`: .fit dell'orologio e .csv di Hevy, ordinate."""
+    suffissi = suffissi or SOURCE_SUFFIXES
     root = Path(root)
     if root.is_file():
-        return [root] if root.suffix.lower() in FIT_SUFFIXES else []
-    return sorted(p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in FIT_SUFFIXES)
+        return [root] if root.suffix.lower() in suffissi else []
+    return sorted(p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in suffissi)
 
 
 def activity_id_from_name(path: Path) -> str | None:

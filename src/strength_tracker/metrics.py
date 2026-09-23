@@ -14,10 +14,13 @@ Assunzioni, tutte esplicite (i dettagli sono nel README):
   marcata inaffidabile. Su una singola ripetizione la formula darebbe 1,033
   volte il peso, quindi quel caso e' trattato a parte e restituisce il peso.
 * **Densita'** = tonnellaggio / tempo attivo della seduta (kg al minuto).
-  Il tempo attivo e' `session.total_timer_time`, l'unico che l'orologio
-  fornisce.
+  Il tempo attivo e' `session.total_timer_time`. Le sedute Hevy non ce
+  l'hanno (l'app non ferma un cronometro durante le pause): li' si usa il
+  tempo totale e la riga lo dichiara in `densita_base`, cosi' non si
+  confrontano due numeri che misurano cose diverse.
 * **Rapporto lavoro/riposo** = durata delle serie attive / durata delle pause,
-  entrambe dai messaggi `set`. Le pause non registrate non vengono stimate.
+  entrambe dai messaggi `set`. Le pause non registrate non vengono stimate, e
+  gli export Hevy non le contengono affatto: per quelle sedute resta `None`.
 * **Deriva della FC** = FC media delle serie attive nell'ultimo terzo della
   seduta meno quella del primo terzo. E' un proxy grezzo di accumulo di
   fatica: sale anche solo perche' la seduta scalda.
@@ -30,7 +33,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 #: Oltre questa soglia la formula di Epley non e' piu' attendibile.
@@ -76,7 +79,9 @@ def riepilogo(conn: sqlite3.Connection) -> dict[str, Any]:
         """SELECT COUNT(*) AS n_sedute,
                   MIN(local_date) AS prima,
                   MAX(local_date) AS ultima,
-                  SUM(total_timer_s) AS tempo_attivo_s
+                  SUM(COALESCE(total_timer_s, total_elapsed_s)) AS tempo_attivo_s,
+                  SUM(CASE WHEN source = 'hevy' THEN 1 ELSE 0 END) AS n_hevy,
+                  SUM(CASE WHEN source = 'garmin' THEN 1 ELSE 0 END) AS n_garmin
            FROM sessions WHERE activity_type = 'strength'"""
     ).fetchone()
     serie = conn.execute(
@@ -98,6 +103,7 @@ def riepilogo(conn: sqlite3.Connection) -> dict[str, Any]:
 
     return {
         "n_sedute": ses["n_sedute"],
+        "sedute_per_sorgente": {"garmin": ses["n_garmin"], "hevy": ses["n_hevy"]},
         "prima_seduta": ses["prima"],
         "ultima_seduta": ses["ultima"],
         "tempo_attivo_totale_s": ses["tempo_attivo_s"],
@@ -321,8 +327,9 @@ def sedute(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     """Una riga per seduta, con densita', lavoro/riposo e deriva della FC."""
     base = _rows(
         conn,
-        """SELECT s.id AS session_id, s.session_uid, s.local_date, s.start_time_local,
-                  s.total_timer_s, s.avg_hr, s.max_hr, s.calories, s.workout_name,
+        """SELECT s.id AS session_id, s.session_uid, s.source, s.local_date,
+                  s.start_time_local, s.total_timer_s, s.total_elapsed_s,
+                  s.avg_hr, s.max_hr, s.calories, s.workout_name,
                   s.body_weight_kg
            FROM sessions s WHERE s.activity_type = 'strength'
            ORDER BY s.local_date DESC""",
@@ -352,7 +359,11 @@ def sedute(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                 "serie_senza_volume": agg.get("serie_senza_volume", 0),
             }
         )
-        tempo = riga["total_timer_s"]
+        # Senza tempo attivo (Hevy) si ripiega sul tempo totale, dichiarandolo.
+        tempo = riga["total_timer_s"] or riga["total_elapsed_s"]
+        riga["densita_base"] = (
+            "tempo attivo" if riga["total_timer_s"] else ("tempo totale" if tempo else None)
+        )
         riga["densita_kg_min"] = (
             round(riga["volume_kg"] / (tempo / 60), 1)
             if riga["volume_kg"] is not None and tempo
@@ -404,6 +415,62 @@ def deriva_fc(conn: sqlite3.Connection, session_id: int) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 
 
+#: Durata assunta quando una seduta non la dichiara, per il confronto fra
+#: sorgenti diverse. Serve solo a decidere se due sedute si sovrappongono.
+DURATA_PRESUNTA_S = 90 * 60
+
+
+def _ora_locale(valore: str | None) -> datetime | None:
+    """Ora locale di una seduta, senza fuso: Hevy non lo scrive."""
+    if not valore:
+        return None
+    try:
+        return datetime.fromisoformat(valore).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+def sedute_doppie(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Stessa seduta registrata da due sorgenti diverse.
+
+    Se logghi la stessa sessione sull'orologio e su Hevy, il tonnellaggio
+    verrebbe contato due volte. Non si decide da soli quale tenere: si
+    segnala, e sei tu a cancellarne una o a smettere di importarne una.
+
+    Il confronto e' sulle finestre temporali locali; a una seduta che non
+    dichiara la durata se ne attribuisce una presunta solo per questo test.
+    """
+    righe = _rows(
+        conn,
+        """SELECT id AS session_id, session_uid, source, local_date, start_time_local,
+                  workout_name, COALESCE(total_timer_s, total_elapsed_s) AS durata_s
+           FROM sessions
+           WHERE activity_type = 'strength'
+           ORDER BY local_date, start_time_local""",
+    )
+    fuori: list[dict[str, Any]] = []
+    for i, a in enumerate(righe):
+        for b in righe[i + 1 :]:
+            if a["source"] == b["source"] or a["local_date"] != b["local_date"]:
+                continue
+            ia, ib = _ora_locale(a["start_time_local"]), _ora_locale(b["start_time_local"])
+            if ia is None or ib is None:
+                continue
+            fa = ia + timedelta(seconds=a["durata_s"] or DURATA_PRESUNTA_S)
+            fb = ib + timedelta(seconds=b["durata_s"] or DURATA_PRESUNTA_S)
+            if ia < fb and ib < fa:
+                fuori.append(
+                    {
+                        "local_date": a["local_date"],
+                        "seduta_a": f"{a['source']}: {a['workout_name'] or a['session_uid']}",
+                        "seduta_b": f"{b['source']}: {b['workout_name'] or b['session_uid']}",
+                        "uid_a": a["session_uid"],
+                        "uid_b": b["session_uid"],
+                    }
+                )
+    return fuori
+
+
 def anomalie(conn: sqlite3.Connection) -> dict[str, list[dict[str, Any]]]:
     """Cose da guardare prima di fidarsi dei numeri."""
     non_mappati = _rows(
@@ -436,6 +503,8 @@ def anomalie(conn: sqlite3.Connection) -> dict[str, list[dict[str, Any]]]:
         """SELECT set_id, local_date, exercise_name, reps, duration_s
            FROM v_sets
            WHERE set_type='active' AND duration_s > 300
+             -- il cardio lungo e' previsto: non e' l'orologio rimasto acceso
+             AND COALESCE(muscle_group, '') <> 'cardio'
            ORDER BY duration_s DESC""",
     )
     sedute_senza_carico = _rows(
@@ -448,6 +517,7 @@ def anomalie(conn: sqlite3.Connection) -> dict[str, list[dict[str, Any]]]:
            ORDER BY local_date DESC""",
     )
     return {
+        "sedute_doppie": sedute_doppie(conn),
         "esercizi_non_mappati": non_mappati,
         "serie_peso_zero": peso_zero,
         "serie_reps_sospette": reps_sospette,

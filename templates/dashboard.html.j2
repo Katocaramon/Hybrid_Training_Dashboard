@@ -218,7 +218,9 @@ footer.note code { font-size: 11.5px; background: var(--surface); border: 1px so
 
   <section class="card">
     <h2>Ultime sedute</h2>
-    <p class="sub">Clicca una riga per aprire il dettaglio serie per serie.</p>
+    <p class="sub">Clicca una riga per aprire il dettaglio serie per serie. Le sedute
+      importate da Hevy non hanno frequenza cardiaca ne' durata delle pause: quelle
+      colonne restano vuote perche' il dato non esiste, non perche' vale zero.</p>
     <div class="scroll-x" id="t-sedute"></div>
   </section>
 
@@ -329,6 +331,10 @@ function opzioni(extra) {
     },
     scales: {
       x: {
+        // I punti stanno al centro della loro banda, non sul bordo: senza
+        // questo barre e linee dello stesso grafico finiscono disallineate,
+        // e l'ultima barra viene tagliata a meta' dal bordo del grafico.
+        offset: true,
         grid: { display: false, drawTicks: false },
         border: { color: css("--axis") },
         ticks: { color: css("--muted"), font: { size: 11 }, maxRotation: 0, autoSkipPadding: 12 }
@@ -573,8 +579,6 @@ function progressione(nome) {
     data: { labels: etichette, datasets },
     options: opzioni({
       scales: {
-        // con una sola seduta il punto finirebbe incollato al bordo
-        x: { offset: true },
         y: { title: { display: true, text: "kg", color: css("--muted"), font: { size: 11 } } }
       },
       plugins: { tooltip: { callbacks: {
@@ -673,9 +677,9 @@ function tabellaSedute() {
   const cont = document.getElementById("t-sedute");
   const t = el("table");
   const thead = el("thead"), tr = el("tr");
-  ["Data", "Allenamento", "Serie", "Volume", "Densita'", "Lavoro/riposo",
+  ["Data", "Allenamento", "Fonte", "Serie", "Volume", "Densita'", "Lavoro/riposo",
    "FC media", "Deriva FC"].forEach((h, i) =>
-    tr.appendChild(el("th", { class: i < 2 ? "testo" : "" }, h)));
+    tr.appendChild(el("th", { class: i < 3 ? "testo" : "" }, h)));
   thead.appendChild(tr); t.appendChild(thead);
   const tbody = el("tbody");
 
@@ -684,9 +688,17 @@ function tabellaSedute() {
                             "aria-expanded": "false", "aria-controls": "dett-" + i });
     riga.appendChild(el("td", { class: "testo" }, "▸ " + dataIt(s.local_date)));
     riga.appendChild(el("td", { class: "testo" }, s.workout_name || "-"));
+    const fonte = el("td", { class: "testo" });
+    fonte.appendChild(el("span", { class: "tag" }, s.source === "hevy" ? "Hevy" : "Garmin"));
+    riga.appendChild(fonte);
     riga.appendChild(cella(num(s.n_serie)));
     riga.appendChild(cella(kg(s.volume_kg)));
-    riga.appendChild(cella(s.densita_kg_min === null ? null : NF1.format(s.densita_kg_min) + " kg/min"));
+    const dens = cella(s.densita_kg_min === null ? null
+      : NF1.format(s.densita_kg_min) + " kg/min" + (s.densita_base === "tempo totale" ? " *" : ""));
+    if (s.densita_base === "tempo totale") {
+      dens.title = "Calcolata sul tempo totale: Hevy non registra il tempo attivo";
+    }
+    riga.appendChild(dens);
     riga.appendChild(cella(s.rapporto_lavoro_riposo === null ? null : NF1.format(s.rapporto_lavoro_riposo)));
     riga.appendChild(cella(s.avg_hr === null ? null : NF1.format(s.avg_hr) + " bpm"));
     riga.appendChild(cella(s.fc_deriva_bpm === null ? null
@@ -694,7 +706,7 @@ function tabellaSedute() {
     tbody.appendChild(riga);
 
     const dett = el("tr", { class: "dettaglio nascosto", id: "dett-" + i });
-    const td = el("td", { class: "contenitore", colspan: "8" });
+    const td = el("td", { class: "contenitore", colspan: "9" });
     td.appendChild(dettaglioSerie(s));
     dett.appendChild(td); tbody.appendChild(dett);
 
@@ -774,6 +786,10 @@ function avviso(testo) {
 function anomalie() {
   const cont = document.getElementById("anomalie");
   const sezioni = [
+    ["sedute_doppie", "Sedute registrate da due sorgenti",
+     ["Data", "Prima", "Seconda"],
+     (r) => [dataIt(r.local_date), r.seduta_a, r.seduta_b],
+     "La stessa seduta e' entrata sia dall'orologio sia da Hevy: il tonnellaggio viene contato due volte. Tieni una sola delle due sorgenti per quella data."],
     ["esercizi_non_mappati", "Esercizi non mappati",
      ["Chiave grezza", "Nota dello step", "Etichetta Garmin", "Serie"],
      (r) => [r.raw_key, r.nota || "-", r.etichetta || "-", num(r.n_serie)],

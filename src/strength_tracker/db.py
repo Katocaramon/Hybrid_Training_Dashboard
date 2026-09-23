@@ -39,7 +39,7 @@ from typing import Any, Iterable
 
 from .fit_parser import ParsedActivity
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Migrazione 1: schema iniziale.
 _MIGRATION_1 = """
@@ -192,7 +192,23 @@ CREATE INDEX IF NOT EXISTS idx_hr_epoch ON hr_samples (session_id, epoch);
 CREATE INDEX IF NOT EXISTS idx_sets_epoch ON sets (session_id, start_epoch);
 """
 
-_MIGRATIONS = [_MIGRATION_1, _MIGRATION_2, _MIGRATION_3]
+# Migrazione 4: da dove viene la seduta, e i campi propri di Hevy.
+#
+# Le sedute non arrivano piu' solo dall'orologio: un export Hevy porta serie e
+# carichi affidabili ma niente FC e niente orario della singola serie. Sapere
+# la sorgente serve a dire quali metriche sono calcolabili e a riconoscere la
+# stessa seduta registrata due volte.
+_MIGRATION_4 = """
+ALTER TABLE sessions ADD COLUMN source TEXT NOT NULL DEFAULT 'garmin';
+ALTER TABLE sets ADD COLUMN rpe REAL;
+ALTER TABLE sets ADD COLUMN superset_id TEXT;
+ALTER TABLE sets ADD COLUMN set_kind TEXT;
+ALTER TABLE sets ADD COLUMN distance_km REAL;
+
+CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions (source, local_date);
+"""
+
+_MIGRATIONS = [_MIGRATION_1, _MIGRATION_2, _MIGRATION_3, _MIGRATION_4]
 
 # L'ultima correzione per ogni serie.
 _VIEWS = """
@@ -216,9 +232,13 @@ SELECT
     ses.local_date,
     ses.iso_year,
     ses.iso_week,
+    ses.source,
     s.set_index,
     s.order_in_session,
     s.set_type,
+    s.set_kind,
+    s.rpe,
+    s.superset_id,
     s.start_time_utc,
     s.duration_s,
     COALESCE(c.exercise_key, s.raw_exercise_key)            AS raw_exercise_key,
@@ -427,8 +447,8 @@ def store_activity(conn: sqlite3.Connection, act: ParsedActivity) -> tuple[int, 
                utc_offset_s, total_elapsed_s, total_timer_s, avg_hr, max_hr, calories,
                total_training_effect, body_weight_kg, sport_profile_name, workout_name,
                device_manufacturer, device_product, device_serial,
-               source_path, source_sha256, ingested_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               source, source_path, source_sha256, ingested_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT(session_uid) DO UPDATE SET
                sport=excluded.sport, sub_sport=excluded.sub_sport,
                start_time_utc=excluded.start_time_utc,
@@ -445,6 +465,7 @@ def store_activity(conn: sqlite3.Connection, act: ParsedActivity) -> tuple[int, 
                device_manufacturer=excluded.device_manufacturer,
                device_product=excluded.device_product,
                device_serial=excluded.device_serial,
+               source=excluded.source,
                source_path=excluded.source_path, source_sha256=excluded.source_sha256,
                ingested_at=excluded.ingested_at""",
         (
@@ -471,6 +492,7 @@ def store_activity(conn: sqlite3.Connection, act: ParsedActivity) -> tuple[int, 
             act.device.manufacturer,
             act.device.product,
             act.device.serial_number,
+            ses.source,
             str(act.source_path),
             act.file_sha256,
             _now(),
@@ -487,8 +509,8 @@ def store_activity(conn: sqlite3.Connection, act: ParsedActivity) -> tuple[int, 
                duration_s, reps, weight_kg, weight_display_unit, planned_reps,
                planned_weight_kg, wkt_step_index, wkt_step_note, raw_exercise_key,
                raw_exercise_label, category_raw, subcategory_raw,
-               start_epoch, end_epoch)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               start_epoch, end_epoch, rpe, superset_id, set_kind, distance_km)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         [
             (
                 session_id,
@@ -510,6 +532,10 @@ def store_activity(conn: sqlite3.Connection, act: ParsedActivity) -> tuple[int, 
                 json.dumps([c for c in s.subcategory_raw]),
                 s.start_time.timestamp() if s.start_time else None,
                 s.end_time.timestamp() if s.end_time else None,
+                s.rpe,
+                s.superset_id,
+                s.set_kind,
+                s.distance_km,
             )
             for order, s in enumerate(act.sets)
         ],

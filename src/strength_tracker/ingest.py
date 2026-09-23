@@ -1,5 +1,10 @@
 """Orchestrazione dell'ingestione.
 
+Due sorgenti, un comando solo: i `.fit` dell'orologio e i `.csv` esportati da
+Hevy finiscono nella stessa cartella e `ingest` riconosce il formato
+dall'estensione. Un export Hevy contiene piu' allenamenti, quindi un singolo
+file puo' produrre piu' sedute.
+
 `ingest` e' idempotente su tre livelli:
 
 1. i file gia' letti (stesso percorso, stesso sha256) vengono saltati subito,
@@ -20,7 +25,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import db
-from .fit_parser import FitSkipped, iter_fit_files, parse_file, sha256_file
+from .fit_parser import (
+    FitSkipped,
+    ParsedActivity,
+    iter_source_files,
+    parse_file,
+    sha256_file,
+)
 
 
 @dataclass
@@ -60,7 +71,7 @@ def ingest_path(
 ) -> IngestReport:
     """Importa un file .fit o una cartella (ricorsiva)."""
     report = IngestReport()
-    files = iter_fit_files(Path(path))
+    files = iter_source_files(Path(path))
     report.scanned = len(files)
 
     for file in files:
@@ -69,21 +80,34 @@ def ingest_path(
             report.already_present.append(str(file))
             continue
         try:
-            activity = parse_file(file)
+            attivita = _leggi(file)
         except FitSkipped as exc:
             db.record_skipped_file(conn, file, digest, str(exc))
             report.skipped.append((str(file), str(exc)))
             continue
 
-        if not force and db.session_exists(conn, activity.session_uid):
-            # Stesso allenamento gia' nel DB sotto un altro percorso.
-            report.already_present.append(str(file))
-            db.record_duplicate_file(conn, file, digest, activity.session_uid)
-            continue
-
-        _, existed = db.store_activity(conn, activity)
-        (report.updated if existed else report.ingested).append(activity.session_uid)
-        report.sets_written += len(activity.sets)
-        report.hr_written += len(activity.hr_samples)
+        nuove = 0
+        for activity in attivita:
+            if not force and db.session_exists(conn, activity.session_uid):
+                # Stesso allenamento gia' nel DB, magari sotto un altro file.
+                report.already_present.append(activity.session_uid)
+                continue
+            _, existed = db.store_activity(conn, activity)
+            (report.updated if existed else report.ingested).append(activity.session_uid)
+            report.sets_written += len(activity.sets)
+            report.hr_written += len(activity.hr_samples)
+            nuove += 1
+        if not nuove:
+            # Niente di nuovo in questo file: si registra per non riaprirlo.
+            db.record_duplicate_file(conn, file, digest, attivita[0].session_uid)
 
     return report
+
+
+def _leggi(file: Path) -> list[ParsedActivity]:
+    """Legge una sorgente. Un `.fit` da' una seduta, un CSV Hevy anche tante."""
+    if file.suffix.lower() == ".csv":
+        from .hevy import parse_csv
+
+        return parse_csv(file)
+    return [parse_file(file)]

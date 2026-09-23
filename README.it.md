@@ -2,10 +2,16 @@
 
 *[English](README.md) · **Italiano***
 
-Strumento locale per analizzare le sedute di **forza** registrate con un Garmin
-Epix Pro Gen 2 ed esportate in `.fit`. Le ripetizioni e i carichi sono inseriti
-a mano sull'orologio durante la seduta, quindi i file contengono gia' i dati a
-livello di singola serie.
+Strumento locale per analizzare le sedute di **forza**, da due sorgenti:
+
+- i file `.fit` di un Garmin Epix Pro Gen 2 — serie, carichi, frequenza
+  cardiaca a 1 Hz e tempi di ogni serie e pausa;
+- gli export CSV di **Hevy** — serie e carichi affidabili, perche' li scrivi tu
+  nell'app, ma senza FC e senza tempi per serie.
+
+Stesso comando per entrambe, stesso database, stessa dashboard. Un esercizio
+mappato su entrambe le sorgenti mantiene **una storia sola** anche quando cambi
+strumento di tracciamento.
 
 Non e' un'app da bodybuilding: l'obiettivo e' capire se la palestra sta
 costruendo forza **senza interferire con il carico di corsa**, con attenzione
@@ -47,9 +53,13 @@ Se `uv` non ce l'hai: `curl -LsSf https://astral.sh/uv/install.sh | sh`
 Il repo ha un solo branch, `claude/strength-tracker-garmin-fit-hmc1px`, ed è
 già quello di default: `git clone` ti dà direttamente questo.
 
-### 2. Dopo ogni seduta: prendere il file `.fit`
+### 2. Dopo ogni seduta: prendere il file
 
-Due strade, stesso file.
+**Da Hevy.** Dalle impostazioni del profilo, esporta i dati: ottieni un CSV con
+**tutto lo storico** degli allenamenti. Non serve ritagliarlo: reimportare
+l'export completo non duplica niente, entrano solo gli allenamenti nuovi.
+
+**Dal Garmin**, se vuoi anche la frequenza cardiaca. Due strade, stesso file.
 
 **Da Garmin Connect (web).** Apri l'attività → ingranaggio in alto a destra →
 **"Esporta originale"**. Scarichi uno zip con dentro `<id>_ACTIVITY.fit`.
@@ -65,7 +75,8 @@ quindi l'ingestione resta idempotente lo stesso.
 
 ### 3. Ogni volta: due comandi
 
-Copia i `.fit` (anche più d'uno, anche in sottocartelle) in `data/fit/` e lancia:
+Copia i file — `.fit`, `.csv` di Hevy, mischiati, anche in sottocartelle — in
+`data/fit/` e lancia:
 
 ```bash
 make session
@@ -110,6 +121,52 @@ segnala quali valori vengono dal file e quali da te.
 | Database | `data/strength.db` | no, ignorato |
 | Dashboard | `output/dashboard.html` | no, ignorato |
 | Mappatura esercizi | `config/exercise_mapping.yaml` | sì, versionata |
+
+## Le due sorgenti
+
+`ingest` riconosce il formato dall'estensione e riempie le stesse tabelle. Un
+CSV di Hevy contiene tutti gli allenamenti, quindi un file solo puo' produrre
+molte sedute.
+
+| | Garmin `.fit` | Hevy `.csv` |
+| --- | --- | --- |
+| Serie, reps, carichi | solo se confermati sull'orologio | **sempre** |
+| Frequenza cardiaca | 1 Hz per tutta la seduta | assente |
+| Orario e durata di ogni serie | sì | assente |
+| Durata delle pause | sì | assente |
+| Tempo attivo | `total_timer_time` | assente (c'è solo inizio–fine) |
+| Fuso orario | dal dispositivo | assente: l'ora è locale, senza offset |
+| Nome esercizio | indice numerico del catalogo | testo in chiaro |
+
+Quello che manca **non viene stimato**: per le sedute Hevy la deriva della FC e
+il rapporto lavoro/riposo restano `NULL`, e la densità si calcola sul tempo
+totale invece che sul tempo attivo, dichiarandolo (`densita_base`).
+
+### Un esercizio, due chiavi
+
+Le chiavi grezze di Hevy sono `hevy:<nome esercizio>`, così non si confondono
+con gli slug del catalogo Garmin. Metterle nella **stessa voce** della
+mappatura è ciò che tiene insieme la storia di un esercizio attraverso il
+cambio di strumento:
+
+```yaml
+  - name: Dumbbell bench press
+    primary: petto
+    match:
+      - bench_press/dumbbell_bench_press     # dall'orologio
+      - "hevy:Bench Press (Dumbbell)"        # da Hevy
+```
+
+Un avvertimento: su Hevy **la nota dello step non esiste**, quindi il trucco
+che distingue il Copenhagen plank da un plank laterale non funziona. Su Hevy
+conviene scegliere una voce di esercizio distinta e mapparla a parte.
+
+### La stessa seduta registrata due volte
+
+Se logghi la stessa sessione sull'orologio *e* su Hevy, il tonnellaggio viene
+contato due volte. Il sistema non sceglie per te: se ne accorge — sedute di
+sorgenti diverse che si sovrappongono nello stesso giorno — e lo segnala fra le
+anomalie. Sta a te cancellarne una o smettere di importare una delle due.
 
 ## Cosa contiene davvero un file FIT di forza
 
@@ -184,8 +241,8 @@ Quattro tabelle di dati più due di servizio, nessun ORM:
 
 | Tabella | Contenuto |
 | --- | --- |
-| `sessions` | una riga per attività: `session_uid` univoco, data locale, settimana ISO, durata, tempo attivo, FC media/max, calorie, dispositivo, file sorgente, ora di ingestione |
-| `sets` | una riga per serie **e** per pausa (`set_type`), solo dati grezzi del file |
+| `sessions` | una riga per attività: `session_uid` univoco, `source` (`garmin` o `hevy`), data locale, settimana ISO, durata, tempo attivo, FC media/max, calorie, dispositivo, file sorgente, ora di ingestione |
+| `sets` | una riga per serie **e** per pausa (`set_type`), solo dati grezzi del file; da Hevy arrivano anche `rpe`, `superset_id` e `set_kind` |
 | `hr_samples` | frequenza cardiaca a 1 Hz, `(session_id, ts_utc)` come chiave |
 | `corrections` | override manuali, append-only |
 | `exercise_map` | proiezione del YAML di mappatura, riscritta a ogni comando |
@@ -289,8 +346,8 @@ Ogni assunzione è qui, non nascosta nel codice.
 | --- | --- | --- |
 | **Tonnellaggio** | Σ (peso × reps) | Solo serie con `weight_mode = carico`. Se manca reps o peso la serie non contribuisce ed è contata a parte: `NULL`, mai zero |
 | **e1RM** | Epley: peso × (1 + reps / 30) | Stima lineare tarata sulle serie corte. Sopra le **12 reps** è marcata inaffidabile. A 1 rep la formula darebbe 1,033× il peso, quindi quel caso restituisce il peso |
-| **Densità** | tonnellaggio / tempo attivo | Tempo attivo = `session.total_timer_time`, l'unico che l'orologio dà |
-| **Lavoro/riposo** | Σ durata serie attive / Σ durata pause | Dai messaggi `set`. Le pause non registrate non vengono stimate |
+| **Densità** | tonnellaggio / tempo attivo | Tempo attivo = `session.total_timer_time`. Hevy non ce l'ha: lì si usa il tempo totale e la riga lo dichiara in `densita_base` |
+| **Lavoro/riposo** | Σ durata serie attive / Σ durata pause | Dai messaggi `set`. Le pause non registrate non vengono stimate, e Hevy non le contiene affatto: per quelle sedute resta `NULL` |
 | **Deriva FC** | FC media ultimo terzo − primo terzo delle serie | Proxy grezzo di fatica: sale anche solo perché la seduta scalda. Servono ≥3 serie con FC, altrimenti `NULL` |
 | **Serie per gruppo** | conteggio serie attive per settimana ISO | Più robusta del tonnellaggio quando gli esercizi cambiano o il carico non è misurabile |
 | **Media mobile** | media 4 settimane sul volume | Calcolata **solo sulle settimane con dati**: una settimana senza allenamento non vale zero, altrimenti la media crollerebbe per finta |

@@ -457,23 +457,31 @@ def test_migrazioni_applicate_in_ordine(tmp_path):
     assert conn.execute("SELECT COUNT(*) c FROM schema_migrations").fetchone()["c"] == db.SCHEMA_VERSION
 
 
-def test_database_v1_migra_senza_perdere_dati(tmp_path, cartella):
-    """Un database creato prima della migrazione 2 si aggiorna sul posto."""
+def test_database_vecchio_migra_senza_perdere_dati(tmp_path, cartella):
+    """Un database fermo a una versione precedente si aggiorna sul posto.
+
+    Le colonne da togliere per simulare il database vecchio si ricavano dalle
+    migrazioni stesse, cosi' il test non va aggiornato a ogni migrazione nuova.
+    """
+    import re
+
     percorso = tmp_path / "vecchio.db"
     conn = db.connect(percorso)
     ingest_path(conn, cartella)
     sid = conn.execute("SELECT id FROM sets WHERE set_index = 0").fetchone()["id"]
     db.add_correction(conn, sid, reps=10)
-    # si simula un database fermo alla versione 1
+
+    successive = "\n".join(db._MIGRATIONS[1:])
+    colonne = re.findall(r"ALTER TABLE (\w+) ADD COLUMN (\w+)", successive)
+    indici = re.findall(r"CREATE INDEX IF NOT EXISTS (\w+)", successive)
+
     conn.execute("DELETE FROM schema_migrations WHERE version > 1")
-    conn.execute("DROP VIEW v_sets")  # le viste v1 non conoscevano le colonne nuove
-    conn.execute("DROP VIEW v_set_hr")
-    conn.execute("DROP INDEX idx_sets_epoch")
-    conn.execute("DROP INDEX idx_hr_epoch")
-    for colonna in ("wkt_step_note", "start_epoch", "end_epoch"):
-        conn.execute(f"ALTER TABLE sets DROP COLUMN {colonna}")
-    conn.execute("ALTER TABLE hr_samples DROP COLUMN epoch")
-    conn.execute("ALTER TABLE sessions DROP COLUMN body_weight_kg")
+    for vista in ("v_sets", "v_set_hr", "v_corrections_effective"):
+        conn.execute(f"DROP VIEW IF EXISTS {vista}")
+    for indice in indici:
+        conn.execute(f"DROP INDEX IF EXISTS {indice}")
+    for tabella, colonna in colonne:
+        conn.execute(f"ALTER TABLE {tabella} DROP COLUMN {colonna}")
     conn.execute("DROP TABLE exercise_map")
     conn.execute(
         "CREATE TABLE exercise_map (raw_key TEXT PRIMARY KEY, exercise_name TEXT NOT NULL,"
@@ -483,10 +491,11 @@ def test_database_v1_migra_senza_perdere_dati(tmp_path, cartella):
     conn.close()
 
     conn = db.connect(percorso)  # la riapertura deve migrare
-    colonne = {r[1] for r in conn.execute("PRAGMA table_info(sets)")}
-    assert {"wkt_step_note", "start_epoch", "end_epoch"} <= colonne
+    presenti = {r[1] for r in conn.execute("PRAGMA table_info(sets)")}
+    assert {c for t, c in colonne if t == "sets"} <= presenti
     assert conn.execute("SELECT COUNT(*) c FROM sets").fetchone()["c"] == 14
     # gli epoch vengono ricalcolati dai timestamp gia' salvati
     assert conn.execute("SELECT COUNT(start_epoch) c FROM sets").fetchone()["c"] == 14
     assert conn.execute("SELECT COUNT(epoch) c FROM hr_samples").fetchone()["c"] == 988
+    # e la correzione manuale e' sopravvissuta
     assert conn.execute("SELECT reps FROM v_sets WHERE set_id = ?", (sid,)).fetchone()["reps"] == 10
