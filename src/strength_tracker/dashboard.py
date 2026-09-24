@@ -83,9 +83,12 @@ def costruisci_dati(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, Any
 
     serie_per_gruppo: dict[str, list[int]] = {g: [0] * n_settimane for g in gruppi_finali}
     volume_per_gruppo: dict[str, list[float | None]] = {g: [None] * n_settimane for g in gruppi_finali}
+    durata_per_gruppo: dict[str, list[float]] = {g: [0.0] * n_settimane for g in gruppi_finali}
     for originale, destinazione in accorpamento.items():
         for i, n in enumerate(per_gruppo["serie"][originale]):
             serie_per_gruppo[destinazione][i] += n
+        for i, d in enumerate(per_gruppo["durata_s"][originale]):
+            durata_per_gruppo[destinazione][i] += d or 0
         for i, v in enumerate(per_gruppo["volume_kg"][originale]):
             if v is not None:
                 corrente = volume_per_gruppo[destinazione][i]
@@ -110,6 +113,7 @@ def costruisci_dati(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, Any
             ),
             "serie": serie_per_gruppo,
             "volume_kg": volume_per_gruppo,
+            "durata_s": durata_per_gruppo,
             "focus": [g for g in focus if g in gruppi_finali],
         },
         # I gruppi sotto osservazione hanno una card loro: ci restano anche
@@ -121,6 +125,8 @@ def costruisci_dati(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, Any
                 "presente": g in per_gruppo["gruppi"],
                 "slot": gruppi_finali.index(g) if g in gruppi_finali else None,
                 "serie": serie_per_gruppo.get(g, [0] * n_settimane),
+                "durata_s": durata_per_gruppo.get(g, [0.0] * n_settimane),
+                "volume_kg": volume_per_gruppo.get(g, [None] * n_settimane),
             }
             for g in focus
         ],

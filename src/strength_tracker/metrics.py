@@ -227,11 +227,18 @@ def serie_per_gruppo(conn: sqlite3.Connection, focus: list[str] | None = None) -
         g: [indice.get((w["iso_year"], w["iso_week"], g), {}).get("volume_kg") for w in settimane]
         for g in gruppi
     }
+    # Per i gruppi allenati a corpo libero (adduttori, hamstring) il
+    # tonnellaggio non esiste: il tempo sotto tensione e' l'unica misura.
+    durate = {
+        g: [indice.get((w["iso_year"], w["iso_week"], g), {}).get("durata_s", 0) or 0 for w in settimane]
+        for g in gruppi
+    }
     return {
         "settimane": settimane,
         "gruppi": gruppi,
         "serie": serie,
         "volume_kg": volumi,
+        "durata_s": durate,
         "focus": [g for g in (focus or []) if g in gruppi],
     }
 

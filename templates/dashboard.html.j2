@@ -191,7 +191,9 @@ footer.note code { font-size: 11.5px; background: var(--surface); border: 1px so
   <section class="card" id="card-focus">
     <h2>Gruppi sotto osservazione</h2>
     <p class="sub">Serie per settimana sui gruppi a rischio di interferenza con il carico
-      di corsa.</p>
+      di corsa. Passa sopra una barra per il tempo sotto tensione: per gli esercizi a
+      corpo libero — Copenhagen plank, Nordic curl — e' l'unica misura di carico che
+      esiste.</p>
     <div class="piccoli" id="focus"></div>
   </section>
 
@@ -533,7 +535,17 @@ function focus() {
       options: opzioni({
         plugins: { legend: { display: false }, tooltip: { callbacks: {
           title: (items) => D.gruppi.settimane[items[0].dataIndex].etichetta,
-          label: (c) => c.raw + " serie"
+          label: (c) => c.raw + " serie",
+          // Per i gruppi a corpo libero il tonnellaggio non esiste: quello
+          // che si puo' confrontare fra settimane e' il tempo sotto tensione.
+          afterLabel: (c) => {
+            const parti = [];
+            const t = f.durata_s[c.dataIndex];
+            if (t) parti.push(durata(t) + " sotto tensione");
+            const v = f.volume_kg[c.dataIndex];
+            if (v) parti.push(kg(v));
+            return parti.join(" - ") || null;
+          }
         } } },
         scales: { y: { ticks: { precision: 0 } } }
       })
