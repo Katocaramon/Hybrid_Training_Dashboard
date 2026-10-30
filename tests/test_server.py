@@ -257,3 +257,21 @@ def test_va_rigenerata(tmp_path):
 
     os.utime(fonte, (os.stat(html).st_mtime + 10,) * 2)
     assert srv.va_rigenerata(html, (fonte,))     # la fonte e' piu' recente
+
+
+def test_porta_occupata_spiegata_invece_del_traceback(opzioni, capsys):
+    """Lasciare un `serve` aperto e' quotidiano: merita un messaggio."""
+    import socket
+
+    presa = socket.socket()
+    presa.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    presa.bind(("127.0.0.1", 0))
+    presa.listen(1)
+    opzioni.porta = presa.getsockname()[1]
+    try:
+        assert srv.avvia(opzioni, apri_browser=False) == 1
+        errore = capsys.readouterr().err
+        assert "gia' occupata" in errore
+        assert "Ctrl+C" in errore and "--port" in errore
+    finally:
+        presa.close()

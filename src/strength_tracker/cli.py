@@ -311,8 +311,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         # generata, la pagina viene rifatta prima di servirla.
         fonti=(percorso_db, dashboard._cerca_asset("templates") / "dashboard.html.j2"),
     )
-    server.avvia(opzioni, apri_browser=not args.no_open)
-    return 0
+    return server.avvia(opzioni, apri_browser=not args.no_open)
 
 
 def cmd_report(args: argparse.Namespace) -> int:

@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import sys
 import threading
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -162,9 +163,35 @@ def crea_server(opzioni: Opzioni) -> HTTPServer:
     return server
 
 
-def avvia(opzioni: Opzioni, apri_browser: bool = True) -> None:
-    """Avvia il server e resta in ascolto finche' non lo fermi con Ctrl+C."""
-    server = crea_server(opzioni)
+def avvia(opzioni: Opzioni, apri_browser: bool = True) -> int:
+    """Avvia il server e resta in ascolto finche' non lo fermi con Ctrl+C.
+
+    Ritorna il codice d'uscita: 0 se e' andata bene, 1 se la porta era
+    occupata. Quest'ultimo caso e' quotidiano — basta un `serve` lasciato
+    aperto in un'altra finestra — e merita un messaggio, non un traceback.
+    """
+    import errno
+
+    try:
+        server = crea_server(opzioni)
+    except OSError as exc:
+        if exc.errno not in (errno.EADDRINUSE, errno.EACCES):
+            raise
+        motivo = (
+            "e' gia' occupata" if exc.errno == errno.EADDRINUSE else "non e' utilizzabile"
+        )
+        print(
+            f"La porta {opzioni.porta} {motivo}.\n"
+            "  Probabilmente c'e' gia' un `serve` aperto in un'altra finestra del\n"
+            "  Terminale: chiudilo con Ctrl+C. Attenzione, quello vecchio gira con\n"
+            "  il codice di prima, quindi conviene fermarlo davvero.\n"
+            "  Per chiuderlo da qui:   lsof -ti tcp:"
+            f"{opzioni.porta} | xargs kill\n"
+            "  Oppure usa un'altra porta:   strength-tracker serve --port "
+            f"{opzioni.porta + 1}",
+            file=sys.stderr,
+        )
+        return 1
     print(f"Dashboard su {opzioni.url}")
     print("Il pulsante 'Sincronizza' scarica da Hevy e ricarica la pagina.")
     print("Ctrl+C per fermare.")
@@ -178,3 +205,4 @@ def avvia(opzioni: Opzioni, apri_browser: bool = True) -> None:
         print("\nServer fermato.")
     finally:
         server.server_close()
+    return 0
