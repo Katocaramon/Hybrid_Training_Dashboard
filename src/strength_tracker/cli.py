@@ -345,7 +345,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
     totale = sum(len(v) for v in a.values())
     print(f"\nANOMALIE ({totale})")
     etichette = {
-        "sedute_doppie": "sedute registrate da due sorgenti (volume contato due volte)",
+        "sedute_doppie": "sedute sovrapposte, cioe' entrate due volte (volume raddoppiato)",
         "esercizi_non_mappati": "esercizi non mappati",
         "serie_peso_zero": "serie con peso zero",
         "serie_reps_sospette": "serie con ripetizioni sospette",

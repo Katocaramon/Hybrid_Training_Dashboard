@@ -76,8 +76,10 @@ esporta i dati e ottieni un CSV con **tutto lo storico**. Non serve ritagliarlo:
 reimportare l'export completo non duplica niente, entrano solo gli allenamenti
 nuovi. Lo stesso vale se salvi su file una risposta JSON dell'API.
 
-Le due strade producono lo stesso identico risultato: puoi partire dal CSV e
-passare a `sync-hevy` in qualsiasi momento senza ritrovarti sedute doppie.
+Le due strade importano gli stessi dati ma **non si riconoscono fra loro**: se
+passi dal CSV a `sync-hevy`, svuota prima il database (`rm data/strength.db`) e
+risincronizza, altrimenti ti ritrovi ogni seduta due volte. La dashboard te lo
+segnalerebbe comunque, fra le anomalie.
 
 **Dal Garmin**, se vuoi anche la frequenza cardiaca. Due strade, stesso file.
 
@@ -156,9 +158,16 @@ titolo, e il tipo di ogni serie (`normal` o `warmup`). Gli orari UTC vengono
 datati nel fuso del computer — `STRENGTH_TRACKER_TZ` lo sovrascrive — perche'
 Hevy non registra in che fuso ti sei allenato.
 
-Le due strade producono lo **stesso** `session_uid` per lo stesso allenamento
-(titolo piu' ora locale al minuto): passare dal CSV all'API non duplica niente,
-e c'e' un test che lo verifica.
+**Scegli una sorgente sola.** Un allenamento che arriva dall'API è
+identificato dall'id che Hevy stesso gli dà (`hevy:<workout_id>`): stabile per
+costruzione, indifferente agli arrotondamenti dell'orario e al cambio dell'ora.
+Il CSV quell'id non ce l'ha, quindi lì l'identità si ricostruisce da titolo più
+ora locale al minuto — ed è una ricostruzione, che sullo stesso allenamento può
+non coincidere.
+
+Mescolare export CSV e sync via API sullo stesso periodo crea quindi sedute
+doppie. Se succede non resta nascosto: il controllo sulle **sedute
+sovrapposte** le segnala fra le anomalie.
 
 | | Garmin `.fit` | Hevy `.csv` |
 | --- | --- | --- |

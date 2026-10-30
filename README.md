@@ -79,8 +79,10 @@ settings and you get a CSV with **your entire history**. No need to trim it —
 re-importing the full export duplicates nothing, only new workouts go in. The
 same holds for an API JSON response saved to a file.
 
-Both routes give identical results: you can start from the CSV and move to
-`sync-hevy` whenever you like without ending up with duplicate sessions.
+Both routes import the same data but **don't recognise each other**: if you
+move from the CSV to `sync-hevy`, wipe the database first (`rm
+data/strength.db`) and resync, or every session lands twice. The dashboard would
+flag it under anomalies either way.
 
 **From the Garmin**, if you also want heart rate. Two routes, same file.
 
@@ -158,9 +160,15 @@ title, and each set's type (`normal` or `warmup`). UTC timestamps are dated in
 the computer's timezone — `STRENGTH_TRACKER_TZ` overrides it — because Hevy
 doesn't record which zone you trained in.
 
-Both routes produce the **same** `session_uid` for the same workout (title plus
-local time to the minute): moving from CSV to API duplicates nothing, and a test
-enforces it.
+**Pick one source.** A workout fetched from the API is identified by the id
+Hevy itself gives it (`hevy:<workout_id>`): stable by construction, indifferent
+to timestamp rounding and daylight-saving changes. The CSV carries no such id,
+so there identity is reconstructed from title plus local time to the minute —
+and a reconstruction can fail to match for the same workout.
+
+Mixing CSV export and API sync over the same period therefore creates duplicate
+sessions. It doesn't stay hidden: the **overlapping sessions** check flags them
+under anomalies.
 
 | | Garmin `.fit` | Hevy `.csv` |
 | --- | --- | --- |

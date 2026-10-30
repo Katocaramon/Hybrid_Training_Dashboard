@@ -821,10 +821,10 @@ function avviso(testo) {
 function anomalie() {
   const cont = document.getElementById("anomalie");
   const sezioni = [
-    ["sedute_doppie", "Sedute registrate da due sorgenti",
+    ["sedute_doppie", "Sedute entrate due volte",
      ["Data", "Prima", "Seconda"],
      (r) => [dataIt(r.local_date), r.seduta_a, r.seduta_b],
-     "La stessa seduta e' entrata sia dall'orologio sia da Hevy: il tonnellaggio viene contato due volte. Tieni una sola delle due sorgenti per quella data."],
+     "Due sedute si sovrappongono nel tempo: quasi certamente la stessa, entrata da due strade diverse. Il tonnellaggio e' contato due volte. Tieni una sola sorgente per quella data."],
     ["esercizi_non_mappati", "Esercizi non mappati",
      ["Chiave grezza", "Nota dello step", "Etichetta Garmin", "Serie"],
      (r) => [r.raw_key, r.nota || "-", r.etichetta || "-", num(r.n_serie)],

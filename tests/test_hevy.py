@@ -402,8 +402,29 @@ def test_parse_api_ora_solare(roma, tmp_path):
     assert a.session.start_time_local.strftime("%H:%M") == "06:48"
 
 
-def test_api_e_csv_danno_lo_stesso_uid(roma, tmp_path):
-    """Passare dal CSV all'API non deve duplicare le sedute."""
+def test_uid_dall_id_di_hevy(roma, tmp_path):
+    """L'identita' viene dall'id che da' Hevy, non dall'orario."""
+    a = hevy.parse_json(scrivi_json(tmp_path / "w.json", payload_api()))[0]
+    assert a.session_uid == "hevy:e4810419-6391-4556-9924-508a20534c1f"
+
+
+def test_uid_ripiega_sull_orario_se_manca_l_id(roma, tmp_path):
+    dati = payload_api()
+    dati["workout"].pop("id")
+    a = hevy.parse_json(scrivi_json(tmp_path / "w.json", dati))[0]
+    assert a.session_uid.startswith("hevy:20260924T0600:")
+
+
+def test_uid_non_dipende_dall_orario(roma, tmp_path):
+    """Se Hevy corregge l'orario di partenza, resta la stessa seduta."""
+    primo = hevy.parse_json(scrivi_json(tmp_path / "a.json", payload_api()))[0]
+    spostato = payload_api(start_time="2026-09-24T04:07:11+00:00")
+    secondo = hevy.parse_json(scrivi_json(tmp_path / "b.json", spostato))[0]
+    assert primo.session_uid == secondo.session_uid
+
+
+def test_api_e_csv_non_condividono_l_identita(roma, tmp_path):
+    """Il CSV non porta l'id, quindi la sua chiave e' un'altra: sorgenti da non mescolare."""
     da_api = hevy.parse_json(scrivi_json(tmp_path / "w.json", payload_api()))[0]
     da_csv = hevy.parse_csv(
         scrivi_csv(
@@ -413,7 +434,7 @@ def test_api_e_csv_danno_lo_stesso_uid(roma, tmp_path):
                   weight_kg="70", reps="5")],
         )
     )[0]
-    assert da_api.session_uid == da_csv.session_uid
+    assert da_api.session_uid != da_csv.session_uid
 
 
 def test_parse_api_campi_delle_serie(roma, tmp_path):
@@ -465,7 +486,8 @@ def test_ingestione_del_payload_api(conn, roma, tmp_path):
     assert (r["source"], r["local_date"]) == ("hevy", "2026-09-24")
 
 
-def test_csv_e_json_dello_stesso_allenamento_non_si_duplicano(conn, roma, tmp_path):
+def test_mescolare_csv_e_api_duplica_ma_viene_segnalato(conn, roma, tmp_path):
+    """Le due strade non si riconoscono: il controllo sulle sovrapposizioni avvisa."""
     cartella = tmp_path / "fit"
     scrivi_json(cartella / "api.json", payload_api())
     scrivi_csv(
@@ -475,7 +497,10 @@ def test_csv_e_json_dello_stesso_allenamento_non_si_duplicano(conn, roma, tmp_pa
               weight_kg="70", reps="5")],
     )
     ingest_path(conn, cartella)
-    assert conn.execute("SELECT COUNT(*) c FROM sessions").fetchone()["c"] == 1
+    assert conn.execute("SELECT COUNT(*) c FROM sessions").fetchone()["c"] == 2
+    doppie = mt.sedute_doppie(conn)
+    assert len(doppie) == 1, "due sedute sovrapposte devono finire fra le anomalie"
+    assert doppie[0]["local_date"] == "2026-09-24"
 
 
 def test_misura_del_lavoro_per_esercizi_a_tempo(conn, roma, tmp_path):
@@ -633,8 +658,8 @@ def test_sync_non_riporta_quelle_gia_presenti(conn, roma):
     assert conn.execute("SELECT COUNT(*) c FROM sessions").fetchone()["c"] == 1
 
 
-def test_sync_non_duplica_quelle_arrivate_dal_csv(conn, roma, tmp_path):
-    """Chi ha importato il CSV e poi passa all'API non si ritrova niente doppio."""
+def test_sync_dopo_il_csv_raddoppia_e_lo_dice(conn, roma, tmp_path):
+    """Chi arriva dal CSV e passa all'API deve ripartire pulito, non sovrapporre."""
     from strength_tracker.ingest import ingest_path, sync_hevy
 
     cartella = tmp_path / "fit"
@@ -644,9 +669,19 @@ def test_sync_non_duplica_quelle_arrivate_dal_csv(conn, roma, tmp_path):
               "Deadlift (Trap bar)", 0, weight_kg="70", reps="5")],
     )
     ingest_path(conn, cartella)
-    rep = sync_hevy(conn, _client(workout()))
-    assert rep.ingested == [] and len(rep.already_present) == 1
+    sync_hevy(conn, _client(workout()))
+    assert conn.execute("SELECT COUNT(*) c FROM sessions").fetchone()["c"] == 2
+    assert len(mt.sedute_doppie(conn)) == 1  # l'anomalia lo rende visibile
+
+
+def test_sync_due_volte_non_duplica(conn, roma):
+    """Il sync ripetuto e' idempotente: e' la strada che contera' davvero."""
+    from strength_tracker.ingest import sync_hevy
+
+    sync_hevy(conn, _client(workout()))
+    sync_hevy(conn, _client(workout()))
     assert conn.execute("SELECT COUNT(*) c FROM sessions").fetchone()["c"] == 1
+    assert mt.sedute_doppie(conn) == []
 
 
 def test_sync_dry_run_non_scrive(conn, roma):

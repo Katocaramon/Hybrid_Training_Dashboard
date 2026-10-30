@@ -450,11 +450,15 @@ def _ora_locale(valore: str | None) -> datetime | None:
 
 
 def sedute_doppie(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Stessa seduta registrata da due sorgenti diverse.
+    """Due sedute che si sovrappongono nel tempo: quasi certamente la stessa.
 
-    Se logghi la stessa sessione sull'orologio e su Hevy, il tonnellaggio
-    verrebbe contato due volte. Non si decide da soli quale tenere: si
-    segnala, e sei tu a cancellarne una o a smettere di importarne una.
+    Succede quando la stessa sessione entra due volte — dall'orologio e da
+    Hevy, oppure dallo stesso Hevy per due strade diverse (export CSV e sync
+    via API, che non condividono la stessa chiave d'identita'). In entrambi i
+    casi il tonnellaggio verrebbe contato due volte.
+
+    Non si decide da soli quale tenere: si segnala, e sei tu a cancellarne
+    una o a smettere di importare una delle due strade.
 
     Il confronto e' sulle finestre temporali locali; a una seduta che non
     dichiara la durata se ne attribuisce una presunta solo per questo test.
@@ -470,7 +474,7 @@ def sedute_doppie(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     fuori: list[dict[str, Any]] = []
     for i, a in enumerate(righe):
         for b in righe[i + 1 :]:
-            if a["source"] == b["source"] or a["local_date"] != b["local_date"]:
+            if a["local_date"] != b["local_date"]:
                 continue
             ia, ib = _ora_locale(a["start_time_local"]), _ora_locale(b["start_time_local"])
             if ia is None or ib is None:

@@ -38,9 +38,16 @@ Il payload dell'**API** (`/v1/workouts`) dice le stesse cose meglio:
   serie di riscaldamento (`warmup`) da quelle vere (`normal`);
 * `supersets_id` e `distance_meters` al posto di `superset_id` e `distance_km`.
 
-Le due strade producono lo **stesso** `session_uid` per lo stesso allenamento
-(titolo piu' ora locale al minuto), cosi' passare dal CSV all'API non duplica
-niente.
+**Le due strade non si incrociano.** Un allenamento che arriva dall'API e'
+identificato dall'id che Hevy stesso gli da' (`hevy:<workout_id>`): e' stabile
+per costruzione, non dipende da arrotondamenti dell'orario ne' dal cambio
+dell'ora. Il CSV quell'id non ce l'ha, quindi li' l'identita' si ricostruisce
+da titolo piu' ora locale al minuto, ed e' una ricostruzione: sullo stesso
+allenamento le due chiavi possono non coincidere.
+
+Conseguenza pratica: **scegli una sorgente sola**. Mescolare l'export CSV e il
+sync via API sullo stesso periodo crea sedute doppie; se succede, il controllo
+sulle sedute sovrapposte in `metrics.sedute_doppie` lo segnala.
 """
 
 from __future__ import annotations
@@ -126,11 +133,12 @@ def exercise_key(titolo: str) -> str:
 
 
 def session_uid(titolo: str, inizio_locale: datetime) -> str:
-    """Identita' di un allenamento Hevy: titolo e ora locale al minuto.
+    """Identita' ricostruita di un allenamento: titolo e ora locale al minuto.
 
-    Il troncamento al minuto e' quello che fa combaciare le due strade: il CSV
-    scrive gli orari senza secondi, l'API al secondo. Senza, lo stesso
-    allenamento importato prima da CSV e poi da API entrerebbe due volte.
+    Serve solo all'export CSV, che non porta l'id dell'allenamento. E' una
+    ricostruzione, non un'identita' vera: se Hevy scrive l'orario arrotondato
+    diversamente da come lo calcoliamo noi, la chiave cambia. Dove l'id c'e'
+    — cioe' nell'API — si usa quello.
     """
     minuto = inizio_locale.replace(second=0, microsecond=0, tzinfo=None)
     impronta = hashlib.sha256(f"{titolo}|{minuto.isoformat()}".encode()).hexdigest()[:12]
@@ -218,6 +226,7 @@ def _istante(valore: str | None) -> datetime | None:
 
 def _da_api(w: dict[str, Any], source_path: Path, digest: str, fuso: tzinfo) -> ParsedActivity:
     titolo = (w.get("title") or "").strip()
+    id_hevy = str(w.get("id") or "").strip()
     inizio = _istante(w.get("start_time"))
     if inizio is None:
         raise ValueError(f"allenamento {w.get('id')!r} senza start_time valido")
@@ -290,7 +299,9 @@ def _da_api(w: dict[str, Any], source_path: Path, digest: str, fuso: tzinfo) -> 
         sets=serie,
         hr_samples=[],
         warnings=avvisi,
-        uid_override=session_uid(titolo, locale),
+        # L'id di Hevy e' l'identita' vera: non dipende da come leggiamo
+        # l'orario. Solo se manca si ripiega sulla ricostruzione.
+        uid_override=f"hevy:{id_hevy}" if id_hevy else session_uid(titolo, locale),
     )
 
 
