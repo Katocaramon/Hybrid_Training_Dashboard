@@ -2,10 +2,14 @@
 # Partendo da file (.fit, CSV o JSON):           make session FIT=~/Downloads/palestra
 FIT ?= data/fit
 
-.PHONY: install sync sync-hevy session ingest report stats unmapped test clean
+.PHONY: install serve sync sync-hevy session ingest report stats unmapped test clean
 
 install:
 	uv sync
+
+# Dashboard su localhost, col pulsante che sincronizza davvero. Ctrl+C per uscire.
+serve:
+	uv run strength-tracker serve
 
 # Scarica da Hevy e rigenera la dashboard: nessun export da fare a mano.
 sync: sync-hevy report

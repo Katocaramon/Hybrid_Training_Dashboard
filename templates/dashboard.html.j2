@@ -162,24 +162,35 @@ footer.note code { font-size: 11.5px; background: var(--surface); border: 1px so
   </header>
   <p class="generato" id="generato"></p>
 
-  {# La pagina e' un file aperto con file://: il browser non le permette di
-     eseguire comandi sul computer. Il pulsante quindi non sincronizza, spiega
-     come farlo in un gesto. #}
+  {# Aperta con file:// la pagina non puo' eseguire niente: il browser lo
+     impedisce, e il pannello spiega come fare. Servita da `strength-tracker
+     serve` il pulsante chiama invece il processo locale, che sincronizza. #}
   <section class="card nascosto" id="come-aggiornare">
     <h2>Come aggiornare i dati</h2>
-    <p class="sub">Questa pagina è una fotografia: contiene i dati dentro di sé e
-      resta ferma al momento in cui è stata generata. Per rigenerarla con le sedute
-      nuove serve un comando sul tuo computer — il browser, per sicurezza, non
-      permette a un file locale di eseguirlo da solo.</p>
-    <ol class="passi">
-      <li><b>Doppio click su <code>aggiorna.command</code></b>, nella cartella del
-        progetto. Scarica da Hevy, rigenera questa pagina e la riapre.
-        Puoi trascinarlo nel Dock e tenerlo lì.</li>
-      <li>Oppure dal Terminale, nella cartella del progetto:
-        <code id="comando">make sync</code>
-        <button class="link" type="button" id="copia">copia</button>
-        <span class="assente" id="copiato"></span></li>
-    </ol>
+    <div id="istruzioni-file">
+      <p class="sub">Questa pagina è una fotografia: contiene i dati dentro di sé e
+        resta ferma al momento in cui è stata generata. Per rigenerarla con le sedute
+        nuove serve un comando sul tuo computer — il browser, per sicurezza, non
+        permette a un file locale di eseguirlo da solo.</p>
+      <ol class="passi">
+        <li><b>Doppio click su <code>aggiorna.command</code></b>, nella cartella del
+          progetto. Scarica da Hevy, rigenera questa pagina e la riapre.
+          Puoi trascinarlo nel Dock e tenerlo lì.</li>
+        <li>Oppure dal Terminale, nella cartella del progetto:
+          <code id="comando">make sync</code>
+          <button class="link" type="button" id="copia">copia</button>
+          <span class="assente" id="copiato"></span></li>
+        <li>Oppure <code>make serve</code>: apre questa stessa pagina da un piccolo
+          server locale, e lì il pulsante in alto sincronizza davvero.</li>
+      </ol>
+    </div>
+    <div id="istruzioni-servita" class="nascosto">
+      <p class="sub">Stai guardando la dashboard servita in locale: il pulsante
+        <b>Sincronizza</b> in alto scarica le sedute nuove da Hevy, rigenera la pagina
+        e la ricarica. Il server gira solo su questo computer e si ferma con Ctrl+C
+        nel Terminale.</p>
+    </div>
+    <div id="esito-sync"></div>
   </section>
 
   <div class="tiles" id="tiles"></div>
@@ -917,11 +928,48 @@ function collegaControlli() {
 
   const pannello = document.getElementById("come-aggiornare");
   const apri = document.getElementById("aggiorna");
-  apri.addEventListener("click", () => {
-    const chiuso = pannello.classList.toggle("nascosto");
-    apri.textContent = chiuso ? "Aggiorna" : "Chiudi";
-    if (!chiuso) pannello.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  });
+  const esitoSync = document.getElementById("esito-sync");
+  // Servita da `strength-tracker serve`: qui il pulsante puo' agire davvero.
+  const servita = location.protocol === "http:" || location.protocol === "https:";
+
+  function mostraPannello(aperto) {
+    pannello.classList.toggle("nascosto", !aperto);
+    if (aperto) pannello.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  if (servita) {
+    document.getElementById("istruzioni-file").classList.add("nascosto");
+    document.getElementById("istruzioni-servita").classList.remove("nascosto");
+    apri.textContent = "Sincronizza";
+    apri.addEventListener("click", sincronizza);
+  } else {
+    apri.addEventListener("click", () => {
+      const chiuso = pannello.classList.toggle("nascosto");
+      apri.textContent = chiuso ? "Aggiorna" : "Chiudi";
+      if (!chiuso) pannello.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+  }
+
+  async function sincronizza() {
+    apri.disabled = true;
+    apri.textContent = "Sincronizzo…";
+    esitoSync.innerHTML = "";
+    try {
+      const risposta = await fetch("sync", {
+        method: "POST",
+        headers: { "X-Strength-Tracker": "1" }
+      });
+      const dati = await risposta.json().catch(() => ({}));
+      if (!risposta.ok) throw new Error(dati.errore || ("il server ha risposto " + risposta.status));
+      // La pagina contiene i dati: per vederli aggiornati va ricaricata.
+      location.reload();
+    } catch (errore) {
+      apri.disabled = false;
+      apri.textContent = "Sincronizza";
+      esitoSync.appendChild(avviso("Sincronizzazione non riuscita: " + errore.message));
+      mostraPannello(true);
+    }
+  }
   document.getElementById("copia").addEventListener("click", async () => {
     const testo = document.getElementById("comando").textContent;
     const esito = document.getElementById("copiato");

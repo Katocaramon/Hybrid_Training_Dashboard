@@ -63,6 +63,11 @@ export HEVY_API_KEY='la-tua-chiave'   # mettila nel tuo ~/.zshrc
 make sync                              # scarica e rigenera la dashboard
 ```
 
+Oppure `make serve`, che apre la dashboard su `http://127.0.0.1:8765` con un
+pulsante **Sincronizza** che fa tutto da solo: scarica, rigenera e ricarica la
+pagina. Il server gira solo su questo computer, vive finché lo tieni aperto e
+si ferma con Ctrl+C — il file statico resta comunque generato.
+
 Oppure **doppio click su `aggiorna.command`** dal Finder: fa le stesse due cose
 e riapre la dashboard, senza passare dal Terminale. Puoi trascinarlo nel Dock.
 Lanciato dal Finder non legge il tuo `~/.zshrc`, quindi se la chiave sta lì
@@ -455,6 +460,20 @@ strength-tracker report        # genera output/dashboard.html
 make session FIT=~/Downloads/palestra   # ingest + report in un colpo
 ```
 
+### Due modi di aprirla
+
+**Doppio click sul file.** `output/dashboard.html` è autonomo e funziona
+offline, ma è una fotografia: per aggiornarlo serve un comando, perché il
+browser non permette a un file locale di eseguirne.
+
+**`make serve`.** La stessa identica pagina servita da `http://127.0.0.1:8765`,
+dove il pulsante in alto **sincronizza davvero**: chiama il processo che hai
+avviato tu, che scarica da Hevy e rigenera. Server della libreria standard,
+nessuna dipendenza in più, in ascolto solo su localhost. `POST /sync` richiede
+un header che una richiesta cross-origin non può aggiungere, e rifiuta le
+origini estranee: una pagina qualunque aperta nel browser non può farti partire
+una sincronizzazione.
+
 Un **unico file HTML** in `output/dashboard.html`: Chart.js è inserito inline
 dal repo e i dati sono un blocco JSON dentro la pagina. Zero richieste di rete,
 zero server — si apre con doppio click, anche in aereo. Nessun tag `src` o
@@ -515,6 +534,7 @@ strength-tracker unmapped --yaml        # le voci già pronte da incollare nel Y
 strength-tracker correct <set_id> --reps N --weight K [--exercise RAW_KEY] [--note "..."]
 strength-tracker correct --from-csv <file.csv>   # correzioni in blocco
 strength-tracker report                 # genera output/dashboard.html
+strength-tracker serve                  # dashboard su localhost, col pulsante Sincronizza
 strength-tracker stats                  # riepilogo testuale nel terminale
 ```
 

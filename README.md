@@ -66,6 +66,11 @@ export HEVY_API_KEY='your-key'   # put it in your ~/.zshrc
 make sync                         # fetch and regenerate the dashboard
 ```
 
+Or `make serve`, which opens the dashboard at `http://127.0.0.1:8765` with a
+**Sincronizza** button that does everything: fetch, regenerate, reload. The
+server runs on this computer only, lives as long as you keep it open and stops
+with Ctrl+C — the static file is still generated either way.
+
 Or **double-click `aggiorna.command`** in Finder: it does the same two things
 and reopens the dashboard, no Terminal involved. You can keep it in the Dock.
 Launched from Finder it doesn't read your `~/.zshrc`, so if the key lives there,
@@ -454,6 +459,19 @@ strength-tracker report                  # writes output/dashboard.html
 make session FIT=~/Downloads/palestra    # ingest + report in one go
 ```
 
+### Two ways to open it
+
+**Double-click the file.** `output/dashboard.html` is self-contained and works
+offline, but it's a snapshot: updating it takes a command, because the browser
+won't let a local file run one.
+
+**`make serve`.** The very same page served from `http://127.0.0.1:8765`, where
+the top button **actually syncs**: it calls the process you started, which
+fetches from Hevy and regenerates. Standard-library server, no extra
+dependencies, listening on localhost only. `POST /sync` requires a header a
+cross-origin request can't add, and rejects foreign origins: a random page open
+in your browser can't trigger a sync.
+
 A **single HTML file** at `output/dashboard.html`: Chart.js is inlined from the
 repo and the data is a JSON block inside the page. Zero network requests, zero
 server — double-click it, works on a plane. No `src` or `href` tag points
@@ -513,6 +531,7 @@ strength-tracker unmapped --yaml        # entries ready to paste into the YAML
 strength-tracker correct <set_id> --reps N --weight K [--exercise RAW_KEY] [--note "..."]
 strength-tracker correct --from-csv <file.csv>   # bulk corrections
 strength-tracker report                 # writes output/dashboard.html
+strength-tracker serve                  # dashboard on localhost, with a working button
 strength-tracker stats                  # quick textual summary in the terminal
 ```
 

@@ -259,6 +259,58 @@ def cmd_sync_hevy(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    """Serve la dashboard in locale, con la sincronizzazione a portata di clic."""
+    import os
+
+    from . import dashboard, db, server
+    from .hevy import HevyAPIError, HevyClient
+    from .ingest import sync_hevy
+    from .mapping import load_mapping
+
+    chiave = args.api_key or os.environ.get("HEVY_API_KEY", "")
+    if not chiave:
+        print(
+            "[strength-tracker] attenzione: manca HEVY_API_KEY, il pulsante "
+            "'Sincronizza' non potra' funzionare. La dashboard si vede lo stesso.",
+            file=sys.stderr,
+        )
+    percorso_mappatura = args.mapping or default_mapping_path()
+    uscita = args.output or default_output_path()
+
+    def sincronizza(conn) -> tuple[list[str], str | None]:
+        if not chiave:
+            return [], "manca la chiave API: esporta HEVY_API_KEY e riavvia `serve`"
+        db.refresh_exercise_map(conn, load_mapping(percorso_mappatura).as_rows())
+        try:
+            report = sync_hevy(conn, HevyClient(api_key=chiave))
+        except HevyAPIError as exc:
+            return [], str(exc)
+        return report.as_lines(), None
+
+    def rigenera(conn):
+        db.refresh_exercise_map(conn, load_mapping(percorso_mappatura).as_rows())
+        return dashboard.genera(conn, load_mapping(percorso_mappatura), uscita)
+
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        print(
+            f"[strength-tracker] attenzione: in ascolto su {args.host}, quindi "
+            "raggiungibile da altri computer della rete.",
+            file=sys.stderr,
+        )
+
+    opzioni = server.Opzioni(
+        db_path=args.db or default_db_path(),
+        output_path=uscita,
+        sincronizza=sincronizza,
+        rigenera=rigenera,
+        host=args.host,
+        porta=args.port,
+    )
+    server.avvia(opzioni, apri_browser=not args.no_open)
+    return 0
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     """Genera la dashboard HTML."""
     from . import dashboard
@@ -555,6 +607,34 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"mappatura esercizi (default: {default_mapping_path()})",
     )
     p_report.set_defaults(func=cmd_report)
+
+    p_serve = sub.add_parser(
+        "serve",
+        help="apre la dashboard su localhost, con un pulsante che sincronizza davvero",
+    )
+    p_serve.add_argument("--port", type=int, default=8765, help="porta (default 8765)")
+    p_serve.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="indirizzo di ascolto (default 127.0.0.1: solo questo computer)",
+    )
+    p_serve.add_argument(
+        "--no-open", action="store_true", help="non aprire il browser da solo"
+    )
+    p_serve.add_argument(
+        "--api-key", default=None, metavar="CHIAVE", help="chiave API di Hevy"
+    )
+    p_serve.add_argument(
+        "--output", type=Path, default=None, metavar="PATH", help="file HTML da servire"
+    )
+    p_serve.add_argument(
+        "--mapping",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=f"mappatura esercizi (default: {default_mapping_path()})",
+    )
+    p_serve.set_defaults(func=cmd_serve)
 
     p_stats = sub.add_parser("stats", help="riepilogo testuale rapido nel terminale")
     p_stats.add_argument(
