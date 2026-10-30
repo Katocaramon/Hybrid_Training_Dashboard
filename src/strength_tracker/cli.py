@@ -264,6 +264,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     import os
 
     from . import dashboard, db, server
+    from .garmin import GarminError, leggi_chiave
     from .hevy import HevyAPIError, HevyClient
     from .ingest import sync_hevy
     from .mapping import load_mapping
@@ -275,8 +276,13 @@ def cmd_serve(args: argparse.Namespace) -> int:
             "'Sincronizza' non potra' funzionare. La dashboard si vede lo stesso.",
             file=sys.stderr,
         )
+    try:
+        chiave_garmin = leggi_chiave()
+    except GarminError:
+        chiave_garmin = ""  # senza chiave Garmin il pulsante fa solo la palestra
     percorso_mappatura = args.mapping or default_mapping_path()
     uscita = args.output or default_output_path()
+    percorso_token = (args.db or default_db_path()).parent / "garmin_token.json"
 
     def sincronizza(conn) -> tuple[list[str], str | None]:
         if not chiave:
@@ -286,7 +292,26 @@ def cmd_serve(args: argparse.Namespace) -> int:
             report = sync_hevy(conn, HevyClient(api_key=chiave))
         except HevyAPIError as exc:
             return [], str(exc)
-        return report.as_lines(), None
+        righe = report.as_lines()
+        # La corsa e' facoltativa: senza chiave Garmin il pulsante fa comunque
+        # il suo lavoro sulla palestra, e lo dice.
+        if chiave_garmin:
+            from .garmin import GarminClient, sync_garmin
+
+            righe.append("")
+            try:
+                garmin = sync_garmin(
+                    conn,
+                    GarminClient(
+                        api_key=chiave_garmin,
+                        token_path=percorso_token,
+                    ),
+                )
+            except GarminError as exc:
+                righe.append(f"Garmin non ha risposto: {exc}")
+            else:
+                righe.extend(garmin.as_lines())
+        return righe, None
 
     def rigenera(conn):
         db.refresh_exercise_map(conn, load_mapping(percorso_mappatura).as_rows())
@@ -324,13 +349,139 @@ def cmd_report(args: argparse.Namespace) -> int:
     mapping = load_mapping(getattr(args, "mapping", None) or default_mapping_path())
     percorso = dashboard.genera(conn, mapping, args.output or default_output_path())
     print(f"Dashboard generata: {percorso}  ({percorso.stat().st_size / 1024:.0f} KB)")
-    if not conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]:
+    vuoto = conn.execute(
+        "SELECT COUNT(*) FROM sessions WHERE activity_type = 'strength'"
+    ).fetchone()[0]
+    if not vuoto:
         print(
             "[strength-tracker] il database e' vuoto: la dashboard non ha dati da mostrare.",
             file=sys.stderr,
         )
         return 1
     return 0
+
+
+def cmd_sync_garmin(args: argparse.Namespace) -> int:
+    """Scarica corse, bici e stato di recupero dalla Personal API di Garmin."""
+    from datetime import date
+
+    from . import default_db_path
+    from .garmin import GarminClient, GarminError, leggi_chiave, sync_garmin
+
+    try:
+        chiave = args.api_key or leggi_chiave()
+    except GarminError as exc:
+        print(f"[strength-tracker] {exc}", file=sys.stderr)
+        return 2
+
+    dal = None
+    if args.dal:
+        try:
+            dal = date.fromisoformat(_data_iso(args.dal))
+        except ValueError:
+            print(
+                f"[strength-tracker] data non valida: {args.dal} "
+                "(attesa GG/MM/AAAA o AAAA-MM-GG)",
+                file=sys.stderr,
+            )
+            return 2
+
+    conn = _open_db(args)
+    percorso_db = args.db or default_db_path()
+    client = GarminClient(api_key=chiave, token_path=percorso_db.parent / "garmin_token.json")
+    try:
+        rapporto = sync_garmin(
+            conn,
+            client,
+            dal=dal,
+            giorni=args.giorni,
+            solo_attivita=args.solo_attivita,
+            solo_benessere=args.solo_benessere,
+            force=args.force,
+            dry_run=args.dry_run,
+            registra=print,
+        )
+    except GarminError as exc:
+        print(f"[strength-tracker] {exc}", file=sys.stderr)
+        return 2
+
+    print("")
+    if args.dry_run:
+        print("PROVA A VUOTO: non e' stato scritto niente nel database.")
+    for riga in rapporto.as_lines():
+        print(riga)
+    if not rapporto.attivita_lette and not rapporto.giorni_nuovi:
+        print(
+            "[strength-tracker] Garmin non ha restituito niente per questo periodo.",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+def cmd_import_garmin(args: argparse.Namespace) -> int:
+    """Importa lo storico Garmin gia' scaricato come JSON, senza rete."""
+    from .garmin import importa_cartella
+
+    if not args.path.is_dir():
+        print(f"[strength-tracker] cartella non trovata: {args.path}", file=sys.stderr)
+        return 2
+    conn = _open_db(args)
+    rapporto = importa_cartella(
+        conn, args.path, force=args.force, dry_run=args.dry_run, registra=print
+    )
+    print("")
+    if args.dry_run:
+        print("PROVA A VUOTO: non e' stato scritto niente nel database.")
+    for riga in rapporto.as_lines():
+        print(riga)
+    if not rapporto.attivita_lette and not rapporto.giorni_nuovi:
+        print(
+            f"[strength-tracker] in {args.path} non ho trovato activities.json "
+            "ne' i file dei dati quotidiani (daily, sleep, hrv, weight).",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+def _stampa_resistenza(conn) -> bool:
+    """Corsa e recupero: la meta' dei dati che arriva dalla Personal API.
+
+    Ritorna False se non c'e' niente da mostrare, cosi' `stats` puo' dire a
+    chi non ha ancora lanciato `sync-garmin` che quei numeri mancano.
+    """
+    from . import metrics as mt
+
+    res = mt.riepilogo_resistenza(conn)
+    if not res["n_attivita"] and not res["giorni_benessere"]:
+        return False
+
+    print("\nCORSA E RECUPERO (dalla Personal API di Garmin)")
+    print(
+        f"  Attivita'             {res['n_attivita']}  "
+        f"({res['n_corse']} di corsa, {res['km_corsa']:.0f} km, {_durata(res['secondi'])})"
+    )
+    if res["prima"]:
+        print(f"  Periodo               {_data_it(res['prima'])} - {_data_it(res['ultima'])}")
+    print(
+        f"  Giorni di benessere   {res['giorni_benessere']}  "
+        f"(HRV {res['n_hrv']}, sonno {res['n_sonno']}, "
+        f"FC riposo {res['n_fc_riposo']}, peso {res['n_peso']})"
+    )
+
+    settimane = mt.settimane_combinate(conn, ultime=8)
+    if settimane:
+        print("\nPALESTRA E CORSA, SETTIMANA PER SETTIMANA")
+        print("  settimana          palestra      volume  |  corsa")
+        for w in settimane:
+            quante = w["sedute_forza"]
+            forza = f"{quante} seduta" if quante == 1 else f"{quante} sedute"
+            print(
+                f"  {w['etichetta']}  {forza:8s}  {_kg(w['volume_kg']):>10s}  |  "
+                f"{w['km_corsa']:5.1f} km  {_durata(w['secondi_corsa'])}"
+            )
+    return True
 
 
 def cmd_stats(args: argparse.Namespace) -> int:
@@ -341,6 +492,12 @@ def cmd_stats(args: argparse.Namespace) -> int:
     _load_mapping_into(conn, args)
     r = mt.riepilogo(conn)
     if not r["n_sedute"]:
+        if _stampa_resistenza(conn):
+            print(
+                "\nNessuna seduta di palestra: lancia `strength-tracker sync-hevy` "
+                "oppure `ingest <path>`."
+            )
+            return 0
         print("Database vuoto: lancia prima `strength-tracker ingest <path>`.")
         return 1
 
@@ -380,6 +537,8 @@ def cmd_stats(args: argparse.Namespace) -> int:
         print(f" {marchio}{gruppo:20s} {serie}")
     if dati["focus"]:
         print("  * gruppi sotto osservazione (interferenza con la corsa)")
+
+    _stampa_resistenza(conn)
 
     print("\nULTIME SEDUTE")
     for s in mt.sedute(conn)[:8]:
@@ -547,6 +706,72 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"mappatura esercizi (default: {default_mapping_path()})",
     )
     p_sync.set_defaults(func=cmd_sync_hevy)
+
+    p_garmin = sub.add_parser(
+        "sync-garmin",
+        help="scarica corse, bici e recupero dalla Personal API di Garmin",
+    )
+    p_garmin.add_argument(
+        "--api-key",
+        default=None,
+        metavar="CHIAVE",
+        help="chiave della Personal API"
+        " (default: GARMIN_PERSONAL_API_KEY o ~/.strength-tracker.env)",
+    )
+    p_garmin.add_argument(
+        "--dal",
+        default=None,
+        metavar="DATA",
+        help="scarica da questa data (GG/MM/AAAA); senza, riprende da dove era arrivato",
+    )
+    p_garmin.add_argument(
+        "--giorni",
+        type=int,
+        default=365,
+        metavar="N",
+        help="al primo giro, quanti giorni di storico scaricare (default 365)",
+    )
+    meta = p_garmin.add_mutually_exclusive_group()
+    meta.add_argument(
+        "--solo-attivita",
+        action="store_true",
+        help="solo le attivita', senza HRV, sonno, FC a riposo e peso",
+    )
+    meta.add_argument(
+        "--solo-benessere",
+        action="store_true",
+        help="solo HRV, sonno, FC a riposo e peso, senza le attivita'",
+    )
+    p_garmin.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="mostra cosa entrerebbe senza scrivere niente nel database",
+    )
+    p_garmin.add_argument(
+        "--force",
+        action="store_true",
+        help="riscrive anche le attivita' gia' presenti e invariate",
+    )
+    p_garmin.set_defaults(func=cmd_sync_garmin)
+
+    p_import_garmin = sub.add_parser(
+        "import-garmin",
+        help="importa lo storico Garmin gia' salvato come JSON (offline)",
+    )
+    p_import_garmin.add_argument(
+        "path",
+        type=Path,
+        help="cartella con activities.json, daily.json, sleep.json, hrv.json, weight.json",
+    )
+    p_import_garmin.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="mostra cosa entrerebbe senza scrivere niente nel database",
+    )
+    p_import_garmin.add_argument(
+        "--force", action="store_true", help="riscrive anche le attivita' invariate"
+    )
+    p_import_garmin.set_defaults(func=cmd_import_garmin)
 
     p_unmapped = sub.add_parser(
         "unmapped", help="elenca i nomi esercizio grezzi presenti nel DB e non ancora mappati"

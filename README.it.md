@@ -2,24 +2,28 @@
 
 *[English](README.md) · **Italiano***
 
-Strumento locale per analizzare le sedute di **forza**, da due sorgenti:
+Strumento locale per analizzare le sedute di **forza** e confrontarle con il
+carico di corsa. I dati arrivano da tre sorgenti:
 
 - i file `.fit` di un Garmin Epix Pro Gen 2 — serie, carichi, frequenza
   cardiaca a 1 Hz e tempi di ogni serie e pausa;
-- gli export CSV di **Hevy** — serie e carichi affidabili, perche' li scrivi tu
-  nell'app, ma senza FC e senza tempi per serie.
+- **Hevy** — serie e carichi affidabili, perche' li scrivi tu nell'app, ma
+  senza FC e senza tempi per serie. Da export CSV o direttamente dall'API;
+- la **Personal API di Garmin** — corse, bici, HRV, sonno, FC a riposo e peso:
+  tutto cio' che un `.fit` di palestra non contiene.
 
-Stesso comando per entrambe, stesso database, stessa dashboard. Un esercizio
-mappato su entrambe le sorgenti mantiene **una storia sola** anche quando cambi
-strumento di tracciamento.
+Un database solo, cosi' palestra e corsa stanno nella stessa riga settimana per
+settimana. Un esercizio mappato su piu' sorgenti mantiene **una storia sola**
+anche quando cambi strumento di tracciamento.
 
 Non e' un'app da bodybuilding: l'obiettivo e' capire se la palestra sta
 costruendo forza **senza interferire con il carico di corsa**, con attenzione
 particolare a hamstring, adduttori e glutei.
 
-Tutto gira in locale: nessun servizio cloud, nessuna chiamata di rete a
-runtime, nessun account Garmin Connect. I file `.fit` sorgente non vengono mai
-modificati ne' spostati.
+I dati restano sul tuo disco: nessun servizio cloud, nessun database remoto,
+nessuna dashboard online. La rete si usa **solo** quando glielo chiedi tu, con
+`sync-hevy` e `sync-garmin`; tutto il resto — ingestione, metriche, dashboard —
+gira offline. I file `.fit` sorgente non vengono mai modificati ne' spostati.
 
 ## Stato dei lavori
 
@@ -33,6 +37,8 @@ Tutte e cinque sono complete: `ingest` + `report` è il flusso del dopo-allename
 | 3 | Schema SQLite, ingestione idempotente, mappatura, correzioni | ✅ fatto |
 | 4 | Metriche (volume, e1RM, densità, deriva FC) | ✅ fatto |
 | 5 | Dashboard HTML | ✅ fatto |
+| + | Import da Hevy (CSV, API, `sync-hevy`) e dashboard servita in locale | ✅ fatto |
+| + | Corsa e recupero dalla Personal API di Garmin, nello stesso database | ✅ fatto |
 
 ## Come si usa, dall'inizio
 
@@ -109,6 +115,52 @@ Sono gli stessi file originali. Il nome non conta: se manca l'id di Connect
 l'identità della seduta viene dal seriale dell'orologio più l'ora di creazione,
 quindi l'ingestione resta idempotente lo stesso.
 
+### 2b. Corsa e recupero: `sync-garmin`
+
+Serve la tua **Personal API Key** di Garmin, che si genera dal tuo account
+Garmin Connect ed e' legata solo a te:
+
+```bash
+export GARMIN_PERSONAL_API_KEY='la-tua-chiave'   # o in ~/.strength-tracker.env
+uv run strength-tracker sync-garmin --dry-run    # prima prova a vuoto
+uv run strength-tracker sync-garmin              # poi davvero
+```
+
+Porta nel database condiviso:
+
+- **attivita' di resistenza** — corsa, bici, nuoto: distanza, tempo in
+  movimento, dislivello, passo, FC media e massima, carico di allenamento,
+  training effect, VO2max e migliori frazioni (1 km, miglio, 5, 10, mezza);
+- **stato di recupero**, un giorno per riga — HRV notturna con stato e
+  baseline, sonno (totale, profondo, REM, punteggio), FC a riposo, Body
+  Battery, stress, passi e peso.
+
+Le **sedute di palestra vengono saltate di proposito**: l'elenco attivita'
+dell'API dice che esistono ma non espone le serie, quindi importarle creerebbe
+sedute vuote in conflitto con quelle vere di Hevy. Il rapporto finale lo dice,
+con il numero di attivita' saltate e il motivo.
+
+Al primo giro scarica un anno di storico (`--giorni N` per cambiarlo, `--dal
+GG/MM/AAAA` per partire da una data). Dopo riprende da dove era arrivato,
+rileggendo gli ultimi tre giorni, che erano ancora parziali. Si puo'
+interrompere: ogni finestra di giorni viene salvata appena letta.
+
+```bash
+make sync-all      # Hevy + Garmin + dashboard, in un comando
+```
+
+**Hai gia' lo storico altrove?** Se un altro progetto ha gia' scaricato i dati
+Garmin come JSON (`activities.json`, `daily.json`, `sleep.json`, `hrv.json`,
+`weight.json`), entrano da qui senza toccare la rete:
+
+```bash
+uv run strength-tracker import-garmin ~/percorso/garmin-training-dashboard/data
+```
+
+Passa dagli stessi normalizzatori della sincronizzazione, quindi stessi campi e
+stessa identita': un `sync-garmin` successivo non duplica niente e riprende
+dall'ultimo giorno importato, invece di riscaricare un anno.
+
 ### 3. Ogni volta: due comandi
 
 Copia i file — `.fit`, `.csv` di Hevy, mischiati, anche in sottocartelle — in
@@ -157,9 +209,12 @@ segnala quali valori vengono dal file e quali da te.
 | Database | `data/strength.db` | no, ignorato |
 | Dashboard | `output/dashboard.html` | no, ignorato |
 | Mappatura esercizi | `config/exercise_mapping.yaml` | sì, versionata |
+| Chiavi API | ambiente o `~/.strength-tracker.env` | no, mai |
+| Token Garmin (cache 20h) | `data/garmin_token.json` | no, ignorato |
 
-## Le due sorgenti
+## Le sorgenti della palestra
 
+Per le sedute di forza ci sono due sorgenti: i `.fit` dell'orologio e Hevy.
 `ingest` riconosce il formato dall'estensione e riempie le stesse tabelle. I
 dati di Hevy arrivano in due forme — il **CSV** esportato dall'app e il
 **JSON** dell'API (`/v1/workouts`) — e passano dallo stesso parser. Entrambe
@@ -340,14 +395,38 @@ serie (o se una correzione ne sposta uno). Aggregare subito farebbe
 risparmiare spazio che non è un problema, perdendo dati che non si
 recuperano.
 
-### Spazio per il carico di corsa
+### Il carico di corsa, nello stesso database
 
-`sessions` è già la tabella generica delle attività: ha `activity_type`,
-durata, FC, calorie e la settimana ISO precalcolata. Aggiungere le sedute di
-corsa significa inserirle qui con `activity_type='run'` più una tabella di
-dettaglio (distanza, passo, dislivello) con FK su `sessions(id)`. Nessuna
-migrazione distruttiva, e l'incrocio settimanale palestra/corsa diventa una
-join su `(iso_year, iso_week)`.
+`sessions` era già la tabella generica delle attività, con `activity_type`,
+durata, FC, calorie e la settimana ISO precalcolata: la promessa era che le
+sedute di corsa potessero entrare senza rifare nulla. La **migrazione 5** la
+mantiene, senza una riga di dati riscritta.
+
+Le attività di resistenza stanno in `sessions` con `activity_type` diverso da
+`'strength'` (`run`, `bike`, `swim`, `endurance`) e il loro dettaglio in
+`endurance_details` — distanza, passo, dislivello, carico di allenamento,
+training effect, VO2max, migliori frazioni — con FK su `sessions(id)`.
+
+Lo stato quotidiano dell'atleta non appartiene a nessuna seduta, quindi ha una
+tabella sua: `wellness`, una riga per giorno con HRV (media notturna,
+settimanale, stato e baseline), sonno (totale, profondo, REM, punteggio), FC a
+riposo, Body Battery, stress, passi e peso.
+
+Sopra ci sono due viste:
+
+| Vista | Cosa dà |
+| --- | --- |
+| `v_endurance` | ogni attività col suo dettaglio: la controparte di `v_sets` per la corsa |
+| `v_settimane` | una riga per settimana ISO: sedute e volume in palestra **accanto** a km, tempo e dislivello di corsa |
+
+`v_settimane` è il motivo per cui i due progetti condividono un database: se il
+volume in palestra sale e i chilometri scendono nella stessa settimana,
+l'interferenza si vede qui. Niente viene aggregato alla scrittura, così la
+definizione di "settimana carica" può cambiare domani senza toccare i dati.
+
+Dato che `sessions` ora è condivisa, ogni conteggio di sedute di forza filtra
+esplicitamente su `activity_type = 'strength'`: una corsa non si conta come
+seduta di palestra, e la dashboard della forza resta quella di prima.
 
 ### Reps e carichi: quando ci sono e quando no
 
@@ -526,6 +605,10 @@ Con questa strada i comandi si lanciano come `strength-tracker ...` invece di
 ```bash
 strength-tracker sync-hevy              # scarica da Hevy (serve HEVY_API_KEY)
 strength-tracker sync-hevy --dry-run    # mostra cosa entrerebbe, senza scrivere
+strength-tracker sync-garmin            # corse, bici, HRV, sonno, FC a riposo, peso
+strength-tracker sync-garmin --dry-run  # come sopra, senza scrivere niente
+strength-tracker sync-garmin --dal 01/09/2026   # da una data precisa
+strength-tracker import-garmin <dir>   # storico Garmin gia' in JSON, senza rete
 strength-tracker ingest <path>          # file singolo o cartella, ricorsivo
 strength-tracker ingest <path> --force  # rilegge anche i file già processati
 strength-tracker inspect <file.fit>     # dump JSON dei messaggi grezzi (--raw per gli unknown_*)
@@ -556,6 +639,8 @@ sovrascrivibili:
 | Mappatura | `config/exercise_mapping.yaml` | `STRENGTH_TRACKER_MAPPING` | `--mapping` |
 | Dashboard | `output/dashboard.html` | `STRENGTH_TRACKER_OUTPUT` | `--output` |
 | Chiave API Hevy | — | `HEVY_API_KEY` | `--api-key` |
+| Chiave Personal API Garmin | — | `GARMIN_PERSONAL_API_KEY` | `--api-key` |
+| Token Garmin (cache 20h) | `data/garmin_token.json` | — | — |
 | Fuso per gli orari Hevy | quello del computer | `STRENGTH_TRACKER_TZ` | — |
 
 ## Struttura
@@ -563,7 +648,8 @@ sovrascrivibili:
 ```
 .
 ├── config/exercise_mapping.yaml   # mappatura versionata, editabile a mano
-├── src/strength_tracker/          # fit_parser, db, ingest, mapping, metrics, dashboard, cli
+├── src/strength_tracker/          # fit_parser, hevy, garmin, db, ingest, mapping,
+│                                  # metrics, dashboard, server, cli
 ├── templates/dashboard.html.j2
 ├── vendor/chart.min.js            # Chart.js 4.4.4 UMD, MIT — inlineato nella dashboard
 └── tests/
@@ -592,15 +678,33 @@ uv run python tests/fitgen.py
   sovrascrivendoli.
 - **Niente dati inventati**: se un campo manca resta `NULL` e la dashboard lo
   dichiara, invece di mostrare uno zero.
-- **Estendibile alla corsa**: lo schema tiene le sedute di forza in tabelle
-  proprie e i raccordi temporali (settimana ISO) come chiavi di
-  aggregazione, cosi' aggiungere in seguito una tabella di attivita' di corsa
-  non richiede di rifare il database.
+- **Palestra e corsa nello stesso database, dashboard separate**: i numeri
+  sono confrontabili e interrogabili con una join su `(iso_year, iso_week)`,
+  ma ogni dashboard resta quella che era. La corsa e' entrata con una
+  migrazione additiva, senza riscrivere un dato.
+- **La rete solo su richiesta**: l'unico modulo che la tocca e' quello delle
+  sincronizzazioni. Le chiavi API si leggono da variabile d'ambiente o da un
+  file fuori dal repository, non vengono mai stampate, e il token Garmin
+  (valido 24 ore) finisce in `data/garmin_token.json` con permessi `0600`.
 
 Le assunzioni di ogni formula (Epley, densita', deriva FC) sono documentate
 nella sezione [Le metriche](#le-metriche).
 
 ## Privacy
 
-`.gitignore` esclude `data/`, `output/`, `*.fit` e `*.db`. Fanno eccezione le
-fixture di test, che sono file sintetici o anonimizzati.
+`.gitignore` esclude `data/`, `output/`, `*.fit`, `*.db`, i file `*.env` e
+`garmin_token.json`. Fanno eccezione le fixture di test, che sono file
+sintetici o anonimizzati.
+
+Le chiavi API non stanno nel repository. Mettile nell'ambiente, oppure in
+`~/.strength-tracker.env` (che `aggiorna.command` legge, perche' un processo
+lanciato dal Finder non passa per `~/.zshrc`):
+
+```
+HEVY_API_KEY=...
+GARMIN_PERSONAL_API_KEY=...
+```
+
+La Personal API di Garmin e' legata al tuo account e viene usata in **sola
+lettura**: il programma fa solo GET, piu' la POST che chiede il token. Non
+scrive niente su Garmin Connect.

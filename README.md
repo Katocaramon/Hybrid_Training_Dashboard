@@ -2,22 +2,29 @@
 
 ***English** · [Italiano](README.it.md)*
 
-A local tool for analysing **strength** sessions, from two sources:
+A local tool for analysing **strength** sessions and comparing them against
+running load. Data comes from three sources:
 
 - `.fit` files from a Garmin Epix Pro Gen 2 — sets, loads, heart rate at 1 Hz,
   and the timing of every set and rest;
-- **Hevy** CSV exports — reliable sets and loads, because you type them into the
-  app yourself, but no heart rate and no per-set timing.
+- **Hevy** — reliable sets and loads, because you type them into the app
+  yourself, but no heart rate and no per-set timing. From a CSV export or
+  straight from the API;
+- the **Garmin Personal API** — runs, rides, HRV, sleep, resting HR and body
+  weight: everything a gym `.fit` file doesn't contain.
 
-One command for both, one database, one dashboard. An exercise mapped on both
-sources keeps **a single history** even when you switch tracking tools.
+One database, so gym and running sit in the same row week by week. An exercise
+mapped on several sources keeps **a single history** even when you switch
+tracking tools.
 
 This is not a bodybuilding app. The point is to tell whether the gym work is
 actually building strength **without interfering with running load**, with
 particular attention to hamstrings, adductors and glutes.
 
-Everything runs locally: no cloud service, no network calls at runtime, no
-Garmin Connect account. The source `.fit` files are never modified or moved.
+The data stays on your disk: no cloud service, no remote database, no hosted
+dashboard. The network is used **only** when you ask for it, through
+`sync-hevy` and `sync-garmin`; everything else — ingestion, metrics, dashboard
+— runs offline. The source `.fit` files are never modified or moved.
 
 > The dashboard and the CLI output are in **Italian** by design — this is a
 > personal tool for an Italian-speaking athlete. The code, the schema and this
@@ -35,6 +42,8 @@ are complete: `ingest` + `report` is the post-workout flow.
 | 3 | SQLite schema, idempotent ingestion, mapping, corrections | ✅ done |
 | 4 | Metrics (volume, e1RM, density, HR drift) | ✅ done |
 | 5 | HTML dashboard | ✅ done |
+| + | Hevy import (CSV, API, `sync-hevy`) and the dashboard served locally | ✅ done |
+| + | Running and recovery from the Garmin Personal API, same database | ✅ done |
 
 ## Getting started
 
@@ -112,6 +121,53 @@ and the files live in `GARMIN/Activity/`, named like
 doesn't matter: without a Connect id, session identity falls back to the
 device serial plus creation time, so ingestion stays idempotent either way.
 
+### 2b. Running and recovery: `sync-garmin`
+
+This needs your Garmin **Personal API Key**, which you generate from your own
+Garmin Connect account and which is tied to you alone:
+
+```bash
+export GARMIN_PERSONAL_API_KEY='your-key'        # or in ~/.strength-tracker.env
+uv run strength-tracker sync-garmin --dry-run    # dry run first
+uv run strength-tracker sync-garmin              # then for real
+```
+
+It brings into the shared database:
+
+- **endurance activities** — running, cycling, swimming: distance, moving
+  time, elevation, pace, average and max HR, training load, training effect,
+  VO2max and best splits (1 km, mile, 5 km, 10 km, half);
+- **recovery state**, one row per day — overnight HRV with status and
+  baseline, sleep (total, deep, REM, score), resting HR, Body Battery, stress,
+  steps and body weight.
+
+**Gym sessions are skipped on purpose**: the API's activity list says they
+exist but doesn't expose the sets, so importing them would create empty
+sessions clashing with the real ones from Hevy. The final report says so, with
+the count of skipped activities and the reason.
+
+The first run fetches a year of history (`--giorni N` to change that, `--dal
+DD/MM/YYYY` to start from a given date). After that it resumes where it left
+off, re-reading the last three days, which were still partial. It is safe to
+interrupt: every window of days is saved as soon as it's read.
+
+```bash
+make sync-all      # Hevy + Garmin + dashboard, in one command
+```
+
+**Already have the history elsewhere?** If another project has already pulled
+the Garmin data as JSON (`activities.json`, `daily.json`, `sleep.json`,
+`hrv.json`, `weight.json`), it comes in from there without touching the
+network:
+
+```bash
+uv run strength-tracker import-garmin ~/path/garmin-training-dashboard/data
+```
+
+It goes through the same normalisers as the sync, so same fields and same
+identity: a later `sync-garmin` duplicates nothing and resumes from the last
+imported day instead of re-fetching a year.
+
 ### 3. Every time: two commands
 
 Drop the files — `.fit`, Hevy `.csv`, mixed together, subdirectories included —
@@ -160,9 +216,12 @@ marks which values came from the file and which from you.
 | Database | `data/strength.db` | no, ignored |
 | Dashboard | `output/dashboard.html` | no, ignored |
 | Exercise mapping | `config/exercise_mapping.yaml` | yes, versioned |
+| API keys | environment or `~/.strength-tracker.env` | no, never |
+| Garmin token (20h cache) | `data/garmin_token.json` | no, ignored |
 
-## The two sources
+## The gym sources
 
+Strength sessions have two sources: the watch's `.fit` files and Hevy.
 `ingest` detects the format from the extension and fills the same tables. Hevy
 data comes in two shapes — the **CSV** the app exports and the **JSON** of the
 API (`/v1/workouts`) — and both go through the same parser. Each contains every
@@ -339,14 +398,38 @@ recomputed even if set boundaries change later (or a correction moves one).
 Aggregating up front would save space that isn't a problem, at the cost of data
 you can't get back.
 
-### Room for running load
+### Running load, in the same database
 
-`sessions` is already the generic activity table: it has `activity_type`,
-duration, HR, calories and a precomputed ISO week. Adding running sessions
-means inserting them here with `activity_type='run'` plus a detail table
-(distance, pace, elevation) with an FK on `sessions(id)`. No destructive
-migration, and cross-referencing gym against running by week becomes a join on
-`(iso_year, iso_week)`.
+`sessions` was already the generic activity table, with `activity_type`,
+duration, HR, calories and a precomputed ISO week: the promise was that
+running sessions could arrive without rebuilding anything. **Migration 5**
+keeps it, without rewriting a single row of data.
+
+Endurance activities live in `sessions` with an `activity_type` other than
+`'strength'` (`run`, `bike`, `swim`, `endurance`) and their detail in
+`endurance_details` — distance, pace, elevation, training load, training
+effect, VO2max, best splits — with an FK on `sessions(id)`.
+
+The athlete's daily state belongs to no session, so it gets its own table:
+`wellness`, one row per day with HRV (overnight average, weekly, status and
+baseline), sleep (total, deep, REM, score), resting HR, Body Battery, stress,
+steps and body weight.
+
+Two views sit on top:
+
+| View | What it gives |
+| --- | --- |
+| `v_endurance` | every activity with its detail: the running counterpart of `v_sets` |
+| `v_settimane` | one row per ISO week: gym sessions and volume **next to** running km, time and elevation |
+
+`v_settimane` is the reason the two projects share a database: if gym volume
+goes up and kilometres go down in the same week, the interference shows up
+here. Nothing is aggregated at write time, so the definition of a "heavy week"
+can change tomorrow without touching the data.
+
+Because `sessions` is now shared, every count of strength sessions filters
+explicitly on `activity_type = 'strength'`: a run is not counted as a gym
+session, and the strength dashboard is exactly what it was.
 
 ### Reps and loads: when they're there and when they're not
 
@@ -523,6 +606,10 @@ Going this route, commands are run as `strength-tracker ...` instead of
 ```bash
 strength-tracker sync-hevy              # fetch from Hevy (needs HEVY_API_KEY)
 strength-tracker sync-hevy --dry-run    # show what would go in, writing nothing
+strength-tracker sync-garmin            # runs, rides, HRV, sleep, resting HR, weight
+strength-tracker sync-garmin --dry-run  # same, writing nothing
+strength-tracker sync-garmin --dal 01/09/2026   # from a given date
+strength-tracker import-garmin <dir>   # Garmin history already in JSON, offline
 strength-tracker ingest <path>          # single file or directory, recursive
 strength-tracker ingest <path> --force  # re-read files already processed
 strength-tracker inspect <file.fit>     # JSON dump of raw messages (--raw for unknown_*)
@@ -552,6 +639,8 @@ overridable:
 | Mapping | `config/exercise_mapping.yaml` | `STRENGTH_TRACKER_MAPPING` | `--mapping` |
 | Dashboard | `output/dashboard.html` | `STRENGTH_TRACKER_OUTPUT` | `--output` |
 | Hevy API key | — | `HEVY_API_KEY` | `--api-key` |
+| Garmin Personal API key | — | `GARMIN_PERSONAL_API_KEY` | `--api-key` |
+| Garmin token (20h cache) | `data/garmin_token.json` | — | — |
 | Timezone for Hevy timestamps | the computer's | `STRENGTH_TRACKER_TZ` | — |
 
 ## Layout
@@ -559,7 +648,8 @@ overridable:
 ```
 .
 ├── config/exercise_mapping.yaml   # versioned mapping, hand-editable
-├── src/strength_tracker/          # fit_parser, db, ingest, mapping, metrics, dashboard, cli
+├── src/strength_tracker/          # fit_parser, hevy, garmin, db, ingest, mapping,
+│                                  # metrics, dashboard, server, cli
 ├── templates/dashboard.html.j2
 ├── vendor/chart.min.js            # Chart.js 4.4.4 UMD, MIT — inlined into the dashboard
 └── tests/
@@ -587,14 +677,33 @@ uv run python tests/fitgen.py
   table and are applied over the raw data at read time, never overwriting it.
 - **No invented data**: a missing field stays `NULL` and the dashboard declares
   it, rather than showing a zero.
-- **Extensible to running**: the schema keeps strength sessions in a generic
-  activity table with ISO-week aggregation keys, so adding running activities
-  later won't require rebuilding the database.
+- **Gym and running in one database, separate dashboards**: the numbers are
+  comparable and queryable with a join on `(iso_year, iso_week)`, while each
+  dashboard stays what it was. Running arrived through an additive migration,
+  without rewriting any data.
+- **Network only on request**: the only modules that touch it are the sync
+  ones. API keys are read from the environment or a file outside the
+  repository, are never printed, and the Garmin token (valid 24 hours) is
+  cached in `data/garmin_token.json` with `0600` permissions.
 
 Every formula's assumptions (Epley, density, HR drift) are documented under
 [The metrics](#the-metrics).
 
 ## Privacy
 
-`.gitignore` excludes `data/`, `output/`, `*.fit` and `*.db`. The exception is
-the test fixtures, which are synthetic files carrying no personal data.
+`.gitignore` excludes `data/`, `output/`, `*.fit`, `*.db`, `*.env` files and
+`garmin_token.json`. The exception is the test fixtures, which are synthetic
+files carrying no personal data.
+
+API keys do not live in the repository. Put them in the environment, or in
+`~/.strength-tracker.env` (which `aggiorna.command` reads, because a process
+launched from Finder does not go through `~/.zshrc`):
+
+```
+HEVY_API_KEY=...
+GARMIN_PERSONAL_API_KEY=...
+```
+
+The Garmin Personal API is tied to your own account and used **read-only**: the
+program only issues GETs, plus the POST that requests the token. It never
+writes anything to Garmin Connect.

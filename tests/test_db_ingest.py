@@ -476,7 +476,10 @@ def test_database_vecchio_migra_senza_perdere_dati(tmp_path, cartella):
     indici = re.findall(r"CREATE INDEX IF NOT EXISTS (\w+)", successive)
 
     conn.execute("DELETE FROM schema_migrations WHERE version > 1")
-    for vista in ("v_sets", "v_set_hr", "v_corrections_effective"):
+    # Tutte le viste, non un elenco scritto a mano: SQLite controlla ogni
+    # vista quando si tocca una tabella, quindi lasciarne una in piedi fa
+    # fallire gli ALTER qui sotto.
+    for (vista,) in conn.execute("SELECT name FROM sqlite_master WHERE type = 'view'").fetchall():
         conn.execute(f"DROP VIEW IF EXISTS {vista}")
     for indice in indici:
         conn.execute(f"DROP INDEX IF EXISTS {indice}")

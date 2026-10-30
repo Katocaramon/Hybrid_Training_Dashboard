@@ -6,6 +6,14 @@ output/
 *.db-journal
 *.sqlite
 *.sqlite3
+*.db-wal
+*.db-shm
+
+# --- credenziali: chiavi API e token, mai nel repo ---
+.env
+.env.local
+*.env
+garmin_token.json
 
 # eccezione: le fixture di test sono FIT sintetici/anonimizzati e vanno versionate
 !tests/fixtures/*.fit

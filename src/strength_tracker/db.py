@@ -17,11 +17,13 @@ Scelte di progetto
   `sets.id` (che cambia con `--force`) ma alla coppia stabile
   `(session_uid, set_index)`.
 * **`sessions` e' la tabella generica delle attivita'**, con `activity_type` e
-  la settimana ISO gia' calcolata. Aggiungere in futuro le sedute di corsa
-  vuol dire inserirle qui con `activity_type='run'` piu' una tabella di
-  dettaglio con FK su `sessions(id)`: nessuna migrazione distruttiva, e
-  l'incrocio settimanale palestra/corsa e' una semplice join su
-  `(iso_year, iso_week)`.
+  la settimana ISO gia' calcolata. La migrazione 5 ci ha messo dentro le
+  attivita' di resistenza (`run`, `bike`, `swim`, `endurance`) con il loro
+  dettaglio in `endurance_details`, FK su `sessions(id)`: nessuna migrazione
+  distruttiva, nessun dato riscritto, e l'incrocio settimanale palestra/corsa
+  e' una semplice join su `(iso_year, iso_week)` — la vista `v_settimane`.
+  Poiche' la tabella e' condivisa, ogni conteggio di sedute di forza filtra
+  esplicitamente su `activity_type = 'strength'`.
 * **La FC resta a campione singolo** (1 Hz, ~4300 righe per seduta). Sono
   ~700k righe l'anno a 3 sedute a settimana: SQLite le regge senza accorgersene
   e mantenere il grezzo permette di ricalcolare la FC per serie anche se
@@ -39,7 +41,7 @@ from typing import Any, Iterable
 
 from .fit_parser import ParsedActivity
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # Migrazione 1: schema iniziale.
 _MIGRATION_1 = """
@@ -208,7 +210,87 @@ ALTER TABLE sets ADD COLUMN distance_km REAL;
 CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions (source, local_date);
 """
 
-_MIGRATIONS = [_MIGRATION_1, _MIGRATION_2, _MIGRATION_3, _MIGRATION_4]
+# Migrazione 5: resistenza e benessere, nello stesso database.
+#
+# La migrazione 1 prometteva che le sedute di corsa potessero entrare "senza
+# rifare nulla": eccola mantenuta. Le attivita' di resistenza vanno in
+# `sessions` con `activity_type` diverso da 'strength', il loro dettaglio in
+# `endurance_details` con FK su `sessions(id)`, e l'incrocio palestra/corsa
+# resta una join su (iso_year, iso_week).
+#
+# `wellness` e' una riga per giorno: HRV, sonno, FC a riposo, Body Battery,
+# stress e peso non appartengono a nessuna seduta, descrivono lo stato
+# dell'atleta. Si aggiorna in upsert perche' i dati di oggi sono parziali
+# fino a notte: una riscaricata deve poterli completare.
+#
+# Il JSON grezzo resta in `raw_json` per lo stesso motivo per cui la FC resta
+# a campione singolo: aggiungere domani una colonna non deve costare una
+# nuova scaricata di mesi di storico (e l'API ha limiti di frequenza).
+_MIGRATION_5 = """
+ALTER TABLE sessions ADD COLUMN activity_name TEXT;
+ALTER TABLE sessions ADD COLUMN activity_group TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_sessions_type ON sessions (activity_type, local_date);
+
+-- Dettaglio delle attivita' di resistenza. Una riga per seduta in `sessions`.
+CREATE TABLE IF NOT EXISTS endurance_details (
+    session_id        INTEGER PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    activity_type_key TEXT,
+    distance_km       REAL,
+    moving_time_s     REAL,
+    elevation_gain_m  REAL,
+    elevation_loss_m  REAL,
+    avg_pace_s_km     REAL,
+    avg_speed_kmh     REAL,
+    max_speed_kmh     REAL,
+    avg_cadence_spm   REAL,
+    avg_power_w       REAL,
+    norm_power_w      REAL,
+    training_load     REAL,
+    aerobic_te        REAL,
+    anaerobic_te      REAL,
+    vo2max            REAL,
+    avg_ground_contact_ms REAL,
+    avg_stride_m      REAL,
+    best_1000_s       REAL,
+    best_1609_s       REAL,
+    best_5000_s       REAL,
+    best_10000_s      REAL,
+    best_21098_s      REAL,
+    raw_json          TEXT
+);
+
+-- Stato quotidiano dell'atleta: una riga per giorno, chiave naturale.
+CREATE TABLE IF NOT EXISTS wellness (
+    day               TEXT PRIMARY KEY,
+    resting_hr        INTEGER,
+    hrv_last_night    REAL,
+    hrv_weekly_avg    REAL,
+    hrv_status        TEXT,
+    hrv_baseline_low  REAL,
+    hrv_baseline_high REAL,
+    sleep_h           REAL,
+    sleep_score       INTEGER,
+    deep_sleep_h      REAL,
+    rem_sleep_h       REAL,
+    body_battery_max  INTEGER,
+    body_battery_min  INTEGER,
+    stress_avg        INTEGER,
+    body_weight_kg    REAL,
+    steps             INTEGER,
+    raw_json          TEXT,
+    updated_at        TEXT NOT NULL
+) WITHOUT ROWID;
+
+-- Dove era arrivata l'ultima sincronizzazione, per non riscaricare tutto.
+CREATE TABLE IF NOT EXISTS sync_state (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+) WITHOUT ROWID;
+"""
+
+_MIGRATIONS = [_MIGRATION_1, _MIGRATION_2, _MIGRATION_3, _MIGRATION_4, _MIGRATION_5]
 
 # L'ultima correzione per ogni serie.
 _VIEWS = """
@@ -334,6 +416,93 @@ JOIN hr_samples h
  AND h.epoch < s.end_epoch
 WHERE s.start_epoch IS NOT NULL AND s.end_epoch > s.start_epoch
 GROUP BY s.id;
+
+-- Le attivita' di resistenza con il loro dettaglio: la controparte di
+-- `v_sets` per la corsa e la bici.
+DROP VIEW IF EXISTS v_endurance;
+CREATE VIEW v_endurance AS
+SELECT ses.id                AS session_id,
+       ses.session_uid,
+       ses.activity_type,
+       ses.activity_group,
+       ses.activity_name,
+       ses.local_date,
+       ses.iso_year,
+       ses.iso_week,
+       ses.source,
+       ses.start_time_local,
+       ses.total_elapsed_s,
+       ses.total_timer_s,
+       ses.avg_hr,
+       ses.max_hr,
+       ses.calories,
+       ses.total_training_effect,
+       d.activity_type_key,
+       d.distance_km,
+       d.moving_time_s,
+       d.elevation_gain_m,
+       d.avg_pace_s_km,
+       d.avg_speed_kmh,
+       d.avg_cadence_spm,
+       d.avg_power_w,
+       d.training_load,
+       d.aerobic_te,
+       d.anaerobic_te,
+       d.vo2max
+FROM sessions ses
+JOIN endurance_details d ON d.session_id = ses.id;
+
+-- Il motivo per cui i due progetti condividono un database: palestra e corsa
+-- nella stessa riga, settimana per settimana. Niente e' aggregato alla
+-- scrittura, cosi' la definizione di "settimana carica" puo' cambiare domani
+-- senza toccare i dati.
+DROP VIEW IF EXISTS v_settimane;
+CREATE VIEW v_settimane AS
+WITH settimane AS (
+    SELECT DISTINCT iso_year, iso_week FROM sessions WHERE iso_year IS NOT NULL
+),
+forza AS (
+    SELECT iso_year, iso_week,
+           COUNT(DISTINCT session_id)        AS sedute_forza,
+           SUM(COALESCE(volume_kg, 0))       AS volume_kg,
+           SUM(COALESCE(reps, 0))            AS ripetizioni,
+           SUM(COALESCE(duration_s, 0))      AS secondi_sotto_carico
+    FROM v_sets
+    WHERE set_type = 'active'
+    GROUP BY iso_year, iso_week
+),
+resistenza AS (
+    SELECT iso_year, iso_week,
+           COUNT(*)                          AS sedute_resistenza,
+           SUM(CASE WHEN activity_group = 'corsa'
+                    THEN COALESCE(distance_km, 0) ELSE 0 END)          AS km_corsa,
+           SUM(CASE WHEN activity_group = 'corsa'
+                    THEN COALESCE(moving_time_s, total_timer_s, 0)
+                    ELSE 0 END)                                        AS secondi_corsa,
+           SUM(CASE WHEN activity_group = 'bici'
+                    THEN COALESCE(distance_km, 0) ELSE 0 END)          AS km_bici,
+           SUM(CASE WHEN activity_group = 'corsa'
+                    THEN COALESCE(elevation_gain_m, 0) ELSE 0 END)     AS dislivello_corsa_m,
+           SUM(COALESCE(training_load, 0))                             AS carico_garmin
+    FROM v_endurance
+    GROUP BY iso_year, iso_week
+)
+SELECT s.iso_year,
+       s.iso_week,
+       COALESCE(f.sedute_forza, 0)            AS sedute_forza,
+       COALESCE(f.volume_kg, 0)               AS volume_kg,
+       COALESCE(f.ripetizioni, 0)             AS ripetizioni,
+       COALESCE(f.secondi_sotto_carico, 0)    AS secondi_sotto_carico,
+       COALESCE(r.sedute_resistenza, 0)       AS sedute_resistenza,
+       COALESCE(r.km_corsa, 0)                AS km_corsa,
+       COALESCE(r.secondi_corsa, 0)           AS secondi_corsa,
+       COALESCE(r.km_bici, 0)                 AS km_bici,
+       COALESCE(r.dislivello_corsa_m, 0)      AS dislivello_corsa_m,
+       COALESCE(r.carico_garmin, 0)           AS carico_garmin
+FROM settimane s
+LEFT JOIN forza f      ON f.iso_year = s.iso_year AND f.iso_week = s.iso_week
+LEFT JOIN resistenza r ON r.iso_year = s.iso_year AND r.iso_week = s.iso_week
+ORDER BY s.iso_year, s.iso_week;
 """
 
 
@@ -633,7 +802,8 @@ def set_id_by_position(
     """
     sessioni = conn.execute(
         """SELECT id, session_uid, workout_name FROM sessions
-           WHERE local_date = ? ORDER BY start_time_utc""",
+           WHERE local_date = ? AND activity_type = 'strength'
+           ORDER BY start_time_utc""",
         (local_date,),
     ).fetchall()
     if not sessioni:
@@ -679,3 +849,190 @@ def unmapped_raw_keys(conn: sqlite3.Connection) -> list[sqlite3.Row]:
            GROUP BY raw_exercise_key, COALESCE(wkt_step_note, '')
            ORDER BY n_sets DESC, raw_key"""
     ).fetchall()
+
+
+# --------------------------------------------------------------------------
+# resistenza e benessere
+# --------------------------------------------------------------------------
+
+#: Colonne di `endurance_details` scritte da `store_endurance_activity`.
+_COLONNE_ENDURANCE = (
+    "activity_type_key",
+    "distance_km",
+    "moving_time_s",
+    "elevation_gain_m",
+    "elevation_loss_m",
+    "avg_pace_s_km",
+    "avg_speed_kmh",
+    "max_speed_kmh",
+    "avg_cadence_spm",
+    "avg_power_w",
+    "norm_power_w",
+    "training_load",
+    "aerobic_te",
+    "anaerobic_te",
+    "vo2max",
+    "avg_ground_contact_ms",
+    "avg_stride_m",
+    "best_1000_s",
+    "best_1609_s",
+    "best_5000_s",
+    "best_10000_s",
+    "best_21098_s",
+)
+
+#: Colonne di `wellness` scritte da `store_wellness_day`.
+_COLONNE_WELLNESS = (
+    "resting_hr",
+    "hrv_last_night",
+    "hrv_weekly_avg",
+    "hrv_status",
+    "hrv_baseline_low",
+    "hrv_baseline_high",
+    "sleep_h",
+    "sleep_score",
+    "deep_sleep_h",
+    "rem_sleep_h",
+    "body_battery_max",
+    "body_battery_min",
+    "stress_avg",
+    "body_weight_kg",
+    "steps",
+)
+
+
+def endurance_session_id(conn: sqlite3.Connection, session_uid: str) -> int | None:
+    riga = conn.execute(
+        "SELECT id FROM sessions WHERE session_uid = ?", (session_uid,)
+    ).fetchone()
+    return int(riga["id"]) if riga else None
+
+
+def store_endurance_activity(conn: sqlite3.Connection, att: Any) -> tuple[int, bool]:
+    """Salva (o aggiorna) un'attivita' di resistenza. Ritorna `(id, era_presente)`.
+
+    Riscrive sempre il dettaglio: un'attivita' rinominata o ricalcolata su
+    Garmin Connect deve poter aggiornare la riga senza duplicarla. Non tocca
+    mai una seduta di forza: quelle arrivano dai `.fit` e da Hevy, con le
+    serie che l'API delle attivita' non espone.
+    """
+    esistente = conn.execute(
+        "SELECT id, activity_type FROM sessions WHERE session_uid = ?", (att.session_uid,)
+    ).fetchone()
+    if esistente is not None and esistente["activity_type"] == "strength":
+        raise ValueError(
+            f"{att.session_uid} e' gia' una seduta di forza: non la sovrascrivo"
+        )
+    era_presente = esistente is not None
+
+    conn.execute(
+        """INSERT INTO sessions (
+               session_uid, activity_type, activity_group, activity_name,
+               garmin_activity_id, sport, sub_sport,
+               start_time_utc, start_time_local, local_date, iso_year, iso_week,
+               utc_offset_s, total_elapsed_s, total_timer_s, avg_hr, max_hr, calories,
+               total_training_effect, source, source_path, source_sha256, ingested_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(session_uid) DO UPDATE SET
+               activity_type=excluded.activity_type,
+               activity_group=excluded.activity_group,
+               activity_name=excluded.activity_name,
+               garmin_activity_id=excluded.garmin_activity_id,
+               sport=excluded.sport, sub_sport=excluded.sub_sport,
+               start_time_utc=excluded.start_time_utc,
+               start_time_local=excluded.start_time_local,
+               local_date=excluded.local_date, iso_year=excluded.iso_year,
+               iso_week=excluded.iso_week, utc_offset_s=excluded.utc_offset_s,
+               total_elapsed_s=excluded.total_elapsed_s,
+               total_timer_s=excluded.total_timer_s, avg_hr=excluded.avg_hr,
+               max_hr=excluded.max_hr, calories=excluded.calories,
+               total_training_effect=excluded.total_training_effect,
+               source=excluded.source, source_path=excluded.source_path,
+               source_sha256=excluded.source_sha256, ingested_at=excluded.ingested_at""",
+        (
+            att.session_uid,
+            att.activity_type,
+            att.activity_group,
+            att.activity_name,
+            att.garmin_activity_id,
+            att.sport,
+            att.sub_sport,
+            att.start_time_utc,
+            att.start_time_local,
+            att.local_date,
+            att.iso_year,
+            att.iso_week,
+            att.utc_offset_s,
+            att.total_elapsed_s,
+            att.total_timer_s,
+            att.avg_hr,
+            att.max_hr,
+            att.calories,
+            att.total_training_effect,
+            att.source,
+            att.source_path,
+            att.source_sha256,
+            _now(),
+        ),
+    )
+    session_id = endurance_session_id(conn, att.session_uid)
+    assert session_id is not None  # appena inserita
+
+    dettaglio = att.details
+    colonne = ", ".join(("session_id",) + _COLONNE_ENDURANCE + ("raw_json",))
+    segnaposto = ", ".join("?" * (len(_COLONNE_ENDURANCE) + 2))
+    conn.execute(
+        f"INSERT OR REPLACE INTO endurance_details ({colonne}) VALUES ({segnaposto})",
+        (session_id,)
+        + tuple(dettaglio.get(c) for c in _COLONNE_ENDURANCE)
+        + (json.dumps(att.raw, ensure_ascii=False) if att.raw is not None else None,),
+    )
+    conn.commit()
+    return session_id, era_presente
+
+
+def store_wellness_day(conn: sqlite3.Connection, giorno: str, valori: dict[str, Any],
+                       raw: Any = None) -> bool:
+    """Scrive (in upsert) una giornata di benessere. Ritorna True se era nuova.
+
+    I dati di oggi sono parziali fino a notte, quindi una riscaricata deve
+    poterli completare: ogni campo valorizzato sovrascrive il precedente, e un
+    campo assente nella nuova lettura non cancella quello gia' salvato
+    (COALESCE sul nuovo valore, non sul vecchio).
+    """
+    era_nuovo = (
+        conn.execute("SELECT 1 FROM wellness WHERE day = ?", (giorno,)).fetchone() is None
+    )
+    aggiornamenti = ", ".join(
+        f"{c}=COALESCE(excluded.{c}, wellness.{c})" for c in _COLONNE_WELLNESS
+    )
+    colonne = ", ".join(("day",) + _COLONNE_WELLNESS + ("raw_json", "updated_at"))
+    segnaposto = ", ".join("?" * (len(_COLONNE_WELLNESS) + 3))
+    conn.execute(
+        f"""INSERT INTO wellness ({colonne}) VALUES ({segnaposto})
+            ON CONFLICT(day) DO UPDATE SET {aggiornamenti},
+                raw_json=COALESCE(excluded.raw_json, wellness.raw_json),
+                updated_at=excluded.updated_at""",
+        (giorno,)
+        + tuple(valori.get(c) for c in _COLONNE_WELLNESS)
+        + (
+            json.dumps(raw, ensure_ascii=False) if raw is not None else None,
+            _now(),
+        ),
+    )
+    conn.commit()
+    return era_nuovo
+
+
+def sync_state_get(conn: sqlite3.Connection, chiave: str) -> str | None:
+    riga = conn.execute("SELECT value FROM sync_state WHERE key = ?", (chiave,)).fetchone()
+    return riga["value"] if riga else None
+
+
+def sync_state_set(conn: sqlite3.Connection, chiave: str, valore: str) -> None:
+    conn.execute(
+        """INSERT INTO sync_state (key, value, updated_at) VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at""",
+        (chiave, valore, _now()),
+    )
+    conn.commit()

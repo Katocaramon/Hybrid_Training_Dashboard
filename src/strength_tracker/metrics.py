@@ -98,7 +98,9 @@ def riepilogo(conn: sqlite3.Connection) -> dict[str, Any]:
     if ultima:
         limite = (date.fromisoformat(ultima) - timedelta(weeks=4)).isoformat()
         sedute_4w = conn.execute(
-            "SELECT COUNT(*) AS n FROM sessions WHERE local_date > ?", (limite,)
+            "SELECT COUNT(*) AS n FROM sessions\n"
+            "WHERE activity_type = 'strength' AND local_date > ?",
+            (limite,),
         ).fetchone()["n"]
 
     return {
@@ -128,7 +130,8 @@ def settimane_coperte(conn: sqlite3.Connection) -> list[tuple[int, int]]:
     """
     righe = _rows(
         conn,
-        "SELECT MIN(local_date) AS prima, MAX(local_date) AS ultima FROM sessions",
+        "SELECT MIN(local_date) AS prima, MAX(local_date) AS ultima FROM sessions"
+        " WHERE activity_type = 'strength'",
     )
     if not righe or not righe[0]["prima"]:
         return []
@@ -559,3 +562,67 @@ def dettaglio_seduta(conn: sqlite3.Connection, session_id: int) -> list[dict[str
            ORDER BY v.order_in_session""",
         (session_id,),
     )
+
+
+# --------------------------------------------------------------------------
+# resistenza e benessere (dati condivisi col progetto corsa)
+# --------------------------------------------------------------------------
+
+
+def riepilogo_resistenza(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Numeri di testa delle attivita' di resistenza e del recupero.
+
+    Tutto a NULL quando `sync-garmin` non e' mai stato lanciato: il database
+    resta valido, semplicemente non ha ancora quella meta' dei dati.
+    """
+    att = conn.execute(
+        """SELECT COUNT(*) AS n,
+                  MIN(local_date) AS prima,
+                  MAX(local_date) AS ultima,
+                  SUM(CASE WHEN activity_group = 'corsa' THEN 1 ELSE 0 END) AS n_corse,
+                  SUM(CASE WHEN activity_group = 'corsa'
+                           THEN COALESCE(distance_km, 0) ELSE 0 END) AS km_corsa,
+                  SUM(COALESCE(moving_time_s, total_timer_s, 0)) AS secondi
+           FROM v_endurance"""
+    ).fetchone()
+    ben = conn.execute(
+        """SELECT COUNT(*) AS n,
+                  MIN(day) AS primo,
+                  MAX(day) AS ultimo,
+                  COUNT(hrv_last_night) AS n_hrv,
+                  COUNT(sleep_h) AS n_sonno,
+                  COUNT(resting_hr) AS n_fc_riposo,
+                  COUNT(body_weight_kg) AS n_peso
+           FROM wellness"""
+    ).fetchone()
+    return {
+        "n_attivita": att["n"] or 0,
+        "n_corse": att["n_corse"] or 0,
+        "km_corsa": att["km_corsa"] or 0.0,
+        "secondi": att["secondi"] or 0.0,
+        "prima": att["prima"],
+        "ultima": att["ultima"],
+        "giorni_benessere": ben["n"] or 0,
+        "primo_giorno": ben["primo"],
+        "ultimo_giorno": ben["ultimo"],
+        "n_hrv": ben["n_hrv"] or 0,
+        "n_sonno": ben["n_sonno"] or 0,
+        "n_fc_riposo": ben["n_fc_riposo"] or 0,
+        "n_peso": ben["n_peso"] or 0,
+    }
+
+
+def settimane_combinate(conn: sqlite3.Connection, ultime: int = 12) -> list[dict[str, Any]]:
+    """Palestra e corsa settimana per settimana, nella stessa riga.
+
+    E' la risposta alla domanda del progetto: se il volume in palestra sale e
+    i chilometri scendono nella stessa settimana, l'interferenza si vede qui.
+    """
+    righe = _rows(
+        conn,
+        "SELECT * FROM v_settimane ORDER BY iso_year DESC, iso_week DESC LIMIT ?",
+        (ultime,),
+    )
+    for riga in righe:
+        riga["etichetta"] = _etichetta_settimana(riga["iso_year"], riga["iso_week"])
+    return list(reversed(righe))
