@@ -291,6 +291,20 @@ exercises:
     weight_mode: corpo_libero
     match: ["hevy:Nordic Hamstrings Curls"]
 
+  - name: Tibiali al muro
+    primary: tibiali
+    secondary: []
+    # Schiena al muro, sollevamento delle punte: dorsiflessione, cioe'
+    # l'antagonista del polpaccio. Tenuto separato apposta: per chi corre e'
+    # lavoro preventivo sulla tibia, non lavoro di polpaccio.
+    # A corpo libero e a tempo: lo misura la durata, non le ripetizioni.
+    weight_mode: corpo_libero
+    # ATTENZIONE: su Hevy si chiama "Warm Up", che e' un nome generico. Se un
+    # giorno usi quella voce per un altro esercizio finira' qui dentro.
+    # Conviene rinominarla in Hevy con un nome suo, come hai fatto per il
+    # Copenhagen plank.
+    match: ["hevy:Warm Up"]
+
   - name: Single leg box squat
     primary: quadricipiti
     secondary: [glutei]
