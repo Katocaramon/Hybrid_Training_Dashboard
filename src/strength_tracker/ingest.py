@@ -23,8 +23,12 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from . import db
+if TYPE_CHECKING:  # pragma: no cover
+    from .hevy import HevyClient
+
 from .fit_parser import (
     FitSkipped,
     ParsedActivity,
@@ -36,6 +40,8 @@ from .fit_parser import (
 
 @dataclass
 class IngestReport:
+    #: Cosa si e' esaminato: file su disco oppure allenamenti dall'API.
+    etichetta_scansione: str = "File esaminati:"
     scanned: int = 0
     ingested: list[str] = field(default_factory=list)
     updated: list[str] = field(default_factory=list)
@@ -50,7 +56,7 @@ class IngestReport:
 
     def as_lines(self) -> list[str]:
         lines = [
-            f"File esaminati:      {self.scanned}",
+            f"{self.etichetta_scansione:20s} {self.scanned}",
             f"Sedute nuove:        {len(self.ingested)}",
             f"Sedute aggiornate:   {len(self.updated)}",
             f"Gia' presenti:       {len(self.already_present)}",
@@ -101,6 +107,52 @@ def ingest_path(
             # Niente di nuovo in questo file: si registra per non riaprirlo.
             db.record_duplicate_file(conn, file, digest, attivita[0].session_uid)
 
+    return report
+
+
+def sync_hevy(
+    conn: sqlite3.Connection,
+    client: "HevyClient",
+    *,
+    force: bool = False,
+    dry_run: bool = False,
+    page_size: int = 10,
+    max_pagine: int | None = None,
+    fuso: Any = None,
+) -> IngestReport:
+    """Scarica gli allenamenti da Hevy e li importa, senza passare da un file.
+
+    Le sedute gia' presenti vengono riconosciute dal `session_uid`, che e' lo
+    stesso che produrrebbe l'export CSV: chi arriva dal CSV e passa a qui non
+    si ritrova niente di doppio.
+
+    Con `dry_run` non si scrive nulla: serve a controllare che chiave e
+    connessione funzionino prima di toccare il database.
+    """
+    from .hevy import parse_api_payload
+
+    report = IngestReport(etichetta_scansione="Allenamenti letti:")
+    for grezzo in client.iter_allenamenti(page_size=page_size, max_pagine=max_pagine):
+        report.scanned += 1
+        try:
+            attivita = parse_api_payload(
+                grezzo, source_path=Path(f"hevy-api:{grezzo.get('id', '?')}"), fuso=fuso
+            )
+        except FitSkipped as exc:
+            report.skipped.append((str(grezzo.get("id", "?")), str(exc)))
+            continue
+        for act in attivita:
+            esiste = db.session_exists(conn, act.session_uid)
+            if esiste and not force:
+                report.already_present.append(act.session_uid)
+                continue
+            if dry_run:
+                (report.updated if esiste else report.ingested).append(act.session_uid)
+                report.sets_written += len(act.sets)
+                continue
+            _, era_presente = db.store_activity(conn, act)
+            (report.updated if era_presente else report.ingested).append(act.session_uid)
+            report.sets_written += len(act.sets)
     return report
 
 

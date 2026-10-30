@@ -215,6 +215,50 @@ def _kg(v: float | None, suffisso: str = " kg") -> str:
     return "n/d" if v is None else f"{v:,.0f}{suffisso}".replace(",", ".")
 
 
+def cmd_sync_hevy(args: argparse.Namespace) -> int:
+    """Scarica gli allenamenti da Hevy e li importa."""
+    import os
+
+    from .hevy import HevyAPIError, HevyClient
+    from .ingest import sync_hevy
+
+    chiave = args.api_key or os.environ.get("HEVY_API_KEY", "")
+    if not chiave:
+        print(
+            "[strength-tracker] manca la chiave API di Hevy.\n"
+            "  Generala nelle impostazioni del profilo Hevy (sezione sviluppatore),\n"
+            "  poi:  export HEVY_API_KEY='la-tua-chiave'\n"
+            "  oppure passala con --api-key. Non metterla nel repository.",
+            file=sys.stderr,
+        )
+        return 2
+
+    conn = _open_db(args)
+    _load_mapping_into(conn, args)
+    client = HevyClient(api_key=chiave)
+    try:
+        report = sync_hevy(
+            conn,
+            client,
+            force=args.force,
+            dry_run=args.dry_run,
+            page_size=args.page_size,
+            max_pagine=args.max_pagine,
+        )
+    except HevyAPIError as exc:
+        print(f"[strength-tracker] {exc}", file=sys.stderr)
+        return 2
+
+    if args.dry_run:
+        print("PROVA A VUOTO: non e' stato scritto niente nel database.")
+    for line in report.as_lines():
+        print(line)
+    if not report.scanned:
+        print("[strength-tracker] Hevy non ha restituito nessun allenamento.", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     """Genera la dashboard HTML."""
     from . import dashboard
@@ -415,6 +459,39 @@ def build_parser() -> argparse.ArgumentParser:
         "--include-hr", action="store_true", help="include tutti i campioni di frequenza cardiaca"
     )
     p_inspect.set_defaults(func=cmd_inspect)
+
+    p_sync = sub.add_parser(
+        "sync-hevy",
+        help="scarica gli allenamenti direttamente da Hevy, senza esportare il CSV",
+    )
+    p_sync.add_argument(
+        "--api-key",
+        default=None,
+        metavar="CHIAVE",
+        help="chiave API di Hevy (default: variabile d'ambiente HEVY_API_KEY)",
+    )
+    p_sync.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="mostra cosa entrerebbe senza scrivere niente nel database",
+    )
+    p_sync.add_argument(
+        "--force", action="store_true", help="riscrive anche le sedute gia' presenti"
+    )
+    p_sync.add_argument(
+        "--page-size", type=int, default=10, metavar="N", help="allenamenti per pagina (default 10)"
+    )
+    p_sync.add_argument(
+        "--max-pagine", type=int, default=None, metavar="N", help="si ferma dopo N pagine"
+    )
+    p_sync.add_argument(
+        "--mapping",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=f"mappatura esercizi (default: {default_mapping_path()})",
+    )
+    p_sync.set_defaults(func=cmd_sync_hevy)
 
     p_unmapped = sub.add_parser(
         "unmapped", help="elenca i nomi esercizio grezzi presenti nel DB e non ancora mappati"

@@ -49,6 +49,7 @@ import csv
 import hashlib
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any, Iterator
@@ -443,3 +444,123 @@ def _costruisci(
         # l'export completo, o passare all'API, non duplica niente.
         uid_override=session_uid(titolo, inizio),
     )
+
+
+# --------------------------------------------------------------------------
+# client dell'API
+# --------------------------------------------------------------------------
+
+#: Endpoint pubblico di Hevy. La chiave va nell'header `api-key`.
+API_BASE = "https://api.hevyapp.com/v1"
+
+#: Hevy pagina gli allenamenti a blocchi piccoli.
+PAGE_SIZE = 10
+
+
+class HevyAPIError(Exception):
+    """L'API non ha risposto come doveva. Il messaggio dice cosa fare."""
+
+
+def _transport_urllib(url: str, headers: dict[str, str], timeout: float) -> bytes:
+    """Chiamata HTTP con la sola libreria standard: nessuna dipendenza in piu'."""
+    import urllib.error
+    import urllib.request
+
+    richiesta = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(richiesta, timeout=timeout) as risposta:
+            return risposta.read()
+    except urllib.error.HTTPError as exc:
+        raise HevyAPIError(_spiega_http(exc.code, url)) from exc
+    except urllib.error.URLError as exc:
+        raise HevyAPIError(f"non riesco a contattare Hevy ({exc.reason})") from exc
+
+
+def _spiega_http(codice: int, url: str) -> str:
+    if codice in (401, 403):
+        return (
+            f"Hevy ha rifiutato la chiave API (HTTP {codice}). Controlla "
+            "HEVY_API_KEY: la chiave si genera nelle impostazioni del profilo "
+            "Hevy, nella sezione sviluppatore."
+        )
+    if codice == 404:
+        return f"endpoint non trovato ({url}): l'API di Hevy potrebbe essere cambiata"
+    if codice == 429:
+        return "troppe richieste: Hevy ha applicato un limite, riprova fra qualche minuto"
+    return f"Hevy ha risposto HTTP {codice}"
+
+
+@dataclass
+class HevyClient:
+    """Lettura degli allenamenti dall'API di Hevy.
+
+    Solo richieste GET: questo strumento non scrive mai su Hevy.
+    `transport` esiste per poter provare paginazione e gestione degli errori
+    senza rete; in produzione e' quello basato su urllib.
+    """
+
+    api_key: str
+    base_url: str = API_BASE
+    timeout: float = 30.0
+    transport: Any = None
+
+    def _get(self, percorso: str, **parametri: Any) -> dict[str, Any]:
+        from urllib.parse import urlencode
+
+        if not self.api_key:
+            raise HevyAPIError(
+                "manca la chiave API: passa --api-key oppure esporta HEVY_API_KEY"
+            )
+        url = f"{self.base_url.rstrip('/')}/{percorso.lstrip('/')}"
+        if parametri:
+            url = f"{url}?{urlencode(parametri)}"
+        trasporto = self.transport or _transport_urllib
+        grezzo = trasporto(url, {"api-key": self.api_key, "Accept": "application/json"}, self.timeout)
+        try:
+            dati = json.loads(grezzo)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise HevyAPIError(f"risposta non JSON da {url}") from exc
+        if not isinstance(dati, dict):
+            raise HevyAPIError(f"risposta inattesa da {url}: {type(dati).__name__}")
+        return dati
+
+    def pagina_allenamenti(self, pagina: int, page_size: int = PAGE_SIZE) -> dict[str, Any]:
+        return self._get("workouts", page=pagina, pageSize=page_size)
+
+    def allenamento(self, workout_id: str) -> dict[str, Any]:
+        dati = self._get(f"workouts/{workout_id}")
+        return dati.get("workout") or dati
+
+    def iter_allenamenti(
+        self, page_size: int = PAGE_SIZE, max_pagine: int | None = None
+    ) -> Iterator[dict[str, Any]]:
+        """Tutti gli allenamenti, pagina per pagina.
+
+        Si percorrono tutte le pagine: l'ordine in cui Hevy le restituisce non
+        e' garantito per data, quindi fermarsi al primo allenamento gia' noto
+        rischierebbe di saltarne altri. Sono poche decine di richieste anche
+        per anni di allenamenti.
+
+        Se la pagina non porta gia' esercizi e serie, il dettaglio viene
+        chiesto per ogni allenamento.
+        """
+        pagina = 1
+        while True:
+            dati = self.pagina_allenamenti(pagina, page_size)
+            allenamenti = dati.get("workouts")
+            if not isinstance(allenamenti, list):
+                raise HevyAPIError("risposta senza elenco 'workouts'")
+            for w in allenamenti:
+                if "exercises" not in w and w.get("id"):
+                    w = self.allenamento(str(w["id"]))
+                yield w
+            totale = dati.get("page_count")
+            if dati.get("has_next_page") is False:
+                return
+            if isinstance(totale, int) and pagina >= totale:
+                return
+            if not allenamenti:
+                return
+            pagina += 1
+            if max_pagine is not None and pagina > max_pagine:
+                return

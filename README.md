@@ -56,11 +56,31 @@ documented further down.
 The repo has a single branch, `claude/strength-tracker-garmin-fit-hmc1px`, and
 it is already the default: `git clone` gives you exactly that.
 
-### 2. After each session: get the file
+### 2. After each session: get the data
 
-**From Hevy.** Export your data from the profile settings: you get a CSV with
-**your entire history**. No need to trim it — re-importing the full export
-duplicates nothing, only new workouts go in.
+**From Hevy, hands off.** With an API key, `sync-hevy` fetches the workouts
+itself:
+
+```bash
+export HEVY_API_KEY='your-key'   # put it in your ~/.zshrc
+make sync                         # fetch and regenerate the dashboard
+```
+
+The key is generated in Hevy's profile settings, developer section. It lives in
+an environment variable, **never in the repository**. The first time, do a dry
+run — it writes nothing to the database:
+
+```bash
+uv run strength-tracker sync-hevy --dry-run
+```
+
+**From Hevy, via export.** Without an API key: export your data from the profile
+settings and you get a CSV with **your entire history**. No need to trim it —
+re-importing the full export duplicates nothing, only new workouts go in. The
+same holds for an API JSON response saved to a file.
+
+Both routes give identical results: you can start from the CSV and move to
+`sync-hevy` whenever you like without ending up with duplicate sessions.
 
 **From the Garmin**, if you also want heart rate. Two routes, same file.
 
@@ -466,6 +486,8 @@ Going this route, commands are run as `strength-tracker ...` instead of
 ## All commands
 
 ```bash
+strength-tracker sync-hevy              # fetch from Hevy (needs HEVY_API_KEY)
+strength-tracker sync-hevy --dry-run    # show what would go in, writing nothing
 strength-tracker ingest <path>          # single file or directory, recursive
 strength-tracker ingest <path> --force  # re-read files already processed
 strength-tracker inspect <file.fit>     # JSON dump of raw messages (--raw for unknown_*)
@@ -493,6 +515,8 @@ overridable:
 | Database | `data/strength.db` | `STRENGTH_TRACKER_DB` | `--db` |
 | Mapping | `config/exercise_mapping.yaml` | `STRENGTH_TRACKER_MAPPING` | `--mapping` |
 | Dashboard | `output/dashboard.html` | `STRENGTH_TRACKER_OUTPUT` | `--output` |
+| Hevy API key | — | `HEVY_API_KEY` | `--api-key` |
+| Timezone for Hevy timestamps | the computer's | `STRENGTH_TRACKER_TZ` | — |
 
 ## Layout
 

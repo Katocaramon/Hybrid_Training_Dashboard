@@ -493,3 +493,200 @@ def test_misura_del_lavoro_per_esercizi_a_tempo(conn, roma, tmp_path):
     stacco = mt.progressione(conn, "Trap bar deadlift")
     assert stacco["misura_lavoro"] == "reps"
     assert stacco["punti"][0]["reps_totali"] == 10  # 5 di riscaldamento + 5
+
+
+# =========================================================================
+# client dell'API e sync
+# =========================================================================
+
+
+class FintaApi:
+    """API di Hevy finta: serve pagine vere e registra cosa le viene chiesto.
+
+    Non prova a essere la rete: prova la paginazione, il recupero del
+    dettaglio e la traduzione degli errori. Che l'indirizzo e l'header siano
+    quelli giusti lo dice solo una chiamata reale, ed e' a questo che serve
+    `sync-hevy --dry-run`.
+    """
+
+    def __init__(self, pagine, dettagli=None, errore=None):
+        self.pagine = pagine
+        self.dettagli = dettagli or {}
+        self.errore = errore
+        self.chiamate = []
+
+    def __call__(self, url, headers, timeout):
+        import json as _json
+
+        self.chiamate.append((url, headers))
+        if self.errore:
+            raise hevy.HevyAPIError(self.errore)
+        if "/workouts/" in url:
+            wid = url.rsplit("/", 1)[-1]
+            return _json.dumps({"workout": self.dettagli[wid]}).encode()
+        pagina = int(url.split("page=")[1].split("&")[0])
+        return _json.dumps(self.pagine[pagina - 1]).encode()
+
+
+def workout(idw="w1", titolo="Day 1", inizio="2026-09-24T04:00:38+00:00", esercizi=None):
+    return {
+        "id": idw,
+        "title": titolo,
+        "start_time": inizio,
+        "end_time": "2026-09-24T05:23:31+00:00",
+        "exercises": esercizi
+        if esercizi is not None
+        else [
+            {
+                "index": 0,
+                "title": "Deadlift (Trap bar)",
+                "sets": [{"index": 0, "type": "normal", "weight_kg": 70, "reps": 5}],
+            }
+        ],
+    }
+
+
+def test_client_richiede_la_chiave():
+    client = hevy.HevyClient(api_key="", transport=FintaApi([{"workouts": []}]))
+    with pytest.raises(hevy.HevyAPIError, match="manca la chiave API"):
+        list(client.iter_allenamenti())
+
+
+def test_client_manda_la_chiave_nell_header():
+    finta = FintaApi([{"workouts": [workout()], "page_count": 1}])
+    client = hevy.HevyClient(api_key="segreta", transport=finta)
+    list(client.iter_allenamenti())
+    url, headers = finta.chiamate[0]
+    assert headers["api-key"] == "segreta"
+    assert url.startswith("https://api.hevyapp.com/v1/workouts?")
+    assert "page=1" in url and "pageSize=10" in url
+
+
+def test_client_percorre_tutte_le_pagine():
+    """L'ordine delle pagine non e' garantito per data: non ci si ferma prima."""
+    finta = FintaApi(
+        [
+            {"workouts": [workout("a")], "page_count": 2, "has_next_page": True},
+            {"workouts": [workout("b", inizio="2026-09-21T04:25:08+00:00")],
+             "page_count": 2, "has_next_page": False},
+        ]
+    )
+    client = hevy.HevyClient(api_key="k", transport=finta)
+    assert [w["id"] for w in client.iter_allenamenti()] == ["a", "b"]
+
+
+def test_client_chiede_il_dettaglio_se_la_pagina_non_lo_porta():
+    sommario = {"id": "a", "title": "Day 1", "start_time": "2026-09-24T04:00:38+00:00"}
+    finta = FintaApi([{"workouts": [sommario], "page_count": 1}], dettagli={"a": workout("a")})
+    client = hevy.HevyClient(api_key="k", transport=finta)
+    (w,) = list(client.iter_allenamenti())
+    assert "exercises" in w
+    assert any("/workouts/a" in url for url, _ in finta.chiamate)
+
+
+@pytest.mark.parametrize(
+    "codice, atteso",
+    [
+        (401, "rifiutato la chiave"),
+        (403, "rifiutato la chiave"),
+        (404, "endpoint non trovato"),
+        (429, "troppe richieste"),
+        (500, "HTTP 500"),
+    ],
+)
+def test_errori_http_spiegati(codice, atteso):
+    assert atteso in hevy._spiega_http(codice, "https://api.hevyapp.com/v1/workouts")
+
+
+def test_risposta_non_json():
+    finta = lambda url, headers, timeout: b"<html>errore</html>"
+    client = hevy.HevyClient(api_key="k", transport=finta)
+    with pytest.raises(hevy.HevyAPIError, match="non JSON"):
+        list(client.iter_allenamenti())
+
+
+# --- sync ------------------------------------------------------------------
+
+
+def _client(*allenamenti):
+    return hevy.HevyClient(
+        api_key="k",
+        transport=FintaApi([{"workouts": list(allenamenti), "page_count": 1}]),
+    )
+
+
+def test_sync_importa(conn, roma):
+    from strength_tracker.ingest import sync_hevy
+
+    rep = sync_hevy(conn, _client(workout()))
+    assert len(rep.ingested) == 1 and rep.sets_written == 1
+    r = conn.execute("SELECT source, local_date FROM sessions").fetchone()
+    assert (r["source"], r["local_date"]) == ("hevy", "2026-09-24")
+
+
+def test_sync_non_riporta_quelle_gia_presenti(conn, roma):
+    from strength_tracker.ingest import sync_hevy
+
+    sync_hevy(conn, _client(workout()))
+    rep = sync_hevy(conn, _client(workout()))
+    assert rep.ingested == [] and len(rep.already_present) == 1
+    assert conn.execute("SELECT COUNT(*) c FROM sessions").fetchone()["c"] == 1
+
+
+def test_sync_non_duplica_quelle_arrivate_dal_csv(conn, roma, tmp_path):
+    """Chi ha importato il CSV e poi passa all'API non si ritrova niente doppio."""
+    from strength_tracker.ingest import ingest_path, sync_hevy
+
+    cartella = tmp_path / "fit"
+    scrivi_csv(
+        cartella / "export.csv",
+        [riga("Day 1", "Sep 24, 2026 at 6:00 AM", "Sep 24, 2026 at 7:23 AM",
+              "Deadlift (Trap bar)", 0, weight_kg="70", reps="5")],
+    )
+    ingest_path(conn, cartella)
+    rep = sync_hevy(conn, _client(workout()))
+    assert rep.ingested == [] and len(rep.already_present) == 1
+    assert conn.execute("SELECT COUNT(*) c FROM sessions").fetchone()["c"] == 1
+
+
+def test_sync_dry_run_non_scrive(conn, roma):
+    from strength_tracker.ingest import sync_hevy
+
+    rep = sync_hevy(conn, _client(workout()), dry_run=True)
+    assert len(rep.ingested) == 1  # dice cosa entrerebbe
+    assert conn.execute("SELECT COUNT(*) c FROM sessions").fetchone()["c"] == 0
+
+
+def test_sync_force_riscrive(conn, roma):
+    from strength_tracker.ingest import sync_hevy
+
+    sync_hevy(conn, _client(workout()))
+    rep = sync_hevy(conn, _client(workout()), force=True)
+    assert len(rep.updated) == 1
+    assert conn.execute("SELECT COUNT(*) c FROM sessions").fetchone()["c"] == 1
+
+
+def test_sync_salta_un_allenamento_rotto_senza_fermarsi(conn, roma):
+    from strength_tracker.ingest import sync_hevy
+
+    rotto = workout("rotto", inizio=None)
+    rep = sync_hevy(conn, _client(rotto, workout("buono")))
+    assert len(rep.ingested) == 1 and len(rep.skipped) == 1
+
+
+def test_cli_sync_senza_chiave(tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("HEVY_API_KEY", raising=False)
+    assert main(["--db", str(tmp_path / "x.db"), "sync-hevy"]) == 2
+    assert "manca la chiave API" in capsys.readouterr().err
+
+
+def test_cli_sync_errore_di_rete(tmp_path, capsys, monkeypatch):
+    import strength_tracker.hevy as h
+
+    monkeypatch.setenv("HEVY_API_KEY", "k")
+    monkeypatch.setattr(
+        h, "_transport_urllib",
+        lambda url, headers, timeout: (_ for _ in ()).throw(h.HevyAPIError("non riesco a contattare Hevy")),
+    )
+    assert main(["--db", str(tmp_path / "x.db"), "sync-hevy"]) == 2
+    assert "non riesco a contattare Hevy" in capsys.readouterr().err

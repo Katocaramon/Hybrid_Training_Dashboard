@@ -53,11 +53,31 @@ Se `uv` non ce l'hai: `curl -LsSf https://astral.sh/uv/install.sh | sh`
 Il repo ha un solo branch, `claude/strength-tracker-garmin-fit-hmc1px`, ed è
 già quello di default: `git clone` ti dà direttamente questo.
 
-### 2. Dopo ogni seduta: prendere il file
+### 2. Dopo ogni seduta: prendere i dati
 
-**Da Hevy.** Dalle impostazioni del profilo, esporta i dati: ottieni un CSV con
-**tutto lo storico** degli allenamenti. Non serve ritagliarlo: reimportare
-l'export completo non duplica niente, entrano solo gli allenamenti nuovi.
+**Da Hevy, senza toccare niente.** Se hai una chiave API, `sync-hevy` scarica
+gli allenamenti da solo:
+
+```bash
+export HEVY_API_KEY='la-tua-chiave'   # mettila nel tuo ~/.zshrc
+make sync                              # scarica e rigenera la dashboard
+```
+
+La chiave si genera nelle impostazioni del profilo Hevy, sezione sviluppatore.
+Va in una variabile d'ambiente, **mai nel repository**. La prima volta conviene
+provare a vuoto, che non scrive niente nel database:
+
+```bash
+uv run strength-tracker sync-hevy --dry-run
+```
+
+**Da Hevy, con l'export.** Senza chiave API: dalle impostazioni del profilo
+esporta i dati e ottieni un CSV con **tutto lo storico**. Non serve ritagliarlo:
+reimportare l'export completo non duplica niente, entrano solo gli allenamenti
+nuovi. Lo stesso vale se salvi su file una risposta JSON dell'API.
+
+Le due strade producono lo stesso identico risultato: puoi partire dal CSV e
+passare a `sync-hevy` in qualsiasi momento senza ritrovarti sedute doppie.
 
 **Dal Garmin**, se vuoi anche la frequenza cardiaca. Due strade, stesso file.
 
@@ -467,6 +487,8 @@ Con questa strada i comandi si lanciano come `strength-tracker ...` invece di
 ## Tutti i comandi
 
 ```bash
+strength-tracker sync-hevy              # scarica da Hevy (serve HEVY_API_KEY)
+strength-tracker sync-hevy --dry-run    # mostra cosa entrerebbe, senza scrivere
 strength-tracker ingest <path>          # file singolo o cartella, ricorsivo
 strength-tracker ingest <path> --force  # rilegge anche i file già processati
 strength-tracker inspect <file.fit>     # dump JSON dei messaggi grezzi (--raw per gli unknown_*)
@@ -495,6 +517,8 @@ sovrascrivibili:
 | Database | `data/strength.db` | `STRENGTH_TRACKER_DB` | `--db` |
 | Mappatura | `config/exercise_mapping.yaml` | `STRENGTH_TRACKER_MAPPING` | `--mapping` |
 | Dashboard | `output/dashboard.html` | `STRENGTH_TRACKER_OUTPUT` | `--output` |
+| Chiave API Hevy | — | `HEVY_API_KEY` | `--api-key` |
+| Fuso per gli orari Hevy | quello del computer | `STRENGTH_TRACKER_TZ` | — |
 
 ## Struttura
 
