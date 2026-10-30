@@ -66,6 +66,15 @@ export HEVY_API_KEY='your-key'   # put it in your ~/.zshrc
 make sync                         # fetch and regenerate the dashboard
 ```
 
+Or **double-click `aggiorna.command`** in Finder: it does the same two things
+and reopens the dashboard, no Terminal involved. You can keep it in the Dock.
+Launched from Finder it doesn't read your `~/.zshrc`, so if the key lives there,
+put it in `~/.strength-tracker.env` too:
+
+```
+HEVY_API_KEY=your-key
+```
+
 The key is generated in Hevy's profile settings, developer section. It lives in
 an environment variable, **never in the repository**. The first time, do a dry
 run — it writes nothing to the database:

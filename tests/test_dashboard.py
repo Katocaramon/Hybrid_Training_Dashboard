@@ -189,3 +189,29 @@ def test_cli_report_su_database_vuoto(tmp_path, capsys):
     assert main(["--db", str(tmp_path / "vuoto.db"), "report", "--output", str(uscita)]) == 1
     assert uscita.is_file()  # la pagina c'e' comunque, ma lo dice
     assert "vuoto" in capsys.readouterr().err
+
+
+# --- aggiornamento ---------------------------------------------------------
+
+
+def test_script_di_aggiornamento_eseguibile():
+    import os
+    import stat
+
+    script = Path("aggiorna.command")
+    assert script.is_file(), "serve per l'aggiornamento con doppio click dal Finder"
+    assert os.stat(script).st_mode & stat.S_IXUSR, "deve essere eseguibile"
+    testo = script.read_text(encoding="utf-8")
+    assert "sync-hevy" in testo and "report" in testo
+    # Lanciato dal Finder non legge ~/.zshrc: deve avere un altro modo di
+    # trovare la chiave, altrimenti fallisce sempre.
+    assert ".strength-tracker.env" in testo
+
+
+def test_la_pagina_spiega_come_aggiornare(pagina):
+    _, html, _ = pagina
+    assert "Come aggiornare i dati" in html
+    assert "aggiorna.command" in html
+    assert "make sync" in html
+    # non deve promettere di sincronizzare da sola: non puo'
+    assert "permette a un file locale di eseguirlo" in html

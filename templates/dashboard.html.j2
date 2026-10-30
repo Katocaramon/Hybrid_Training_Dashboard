@@ -143,6 +143,10 @@ footer.note h2 { font-size: 13px; color: var(--ink); margin: 0 0 8px; }
 footer.note li { margin-bottom: 4px; }
 footer.note code { font-size: 11.5px; background: var(--surface); border: 1px solid var(--bordo);
                    border-radius: 4px; padding: 0 4px; }
+.passi { margin: 0; padding-left: 20px; color: var(--ink-2); font-size: 13px; }
+.passi li { margin-bottom: 7px; }
+.passi code { background: var(--plane); border: 1px solid var(--bordo); border-radius: 4px;
+              padding: 1px 6px; font-size: 12.5px; }
 .nascosto { display: none !important; }
 </style>
 </head>
@@ -153,9 +157,30 @@ footer.note code { font-size: 11.5px; background: var(--surface); border: 1px so
     <h1>Strength Tracker</h1>
     <span class="periodo" id="periodo"></span>
     <span class="spacer"></span>
+    <button class="tema" id="aggiorna" type="button">Aggiorna</button>
     <button class="tema" id="tema" type="button" title="Cambia tema">Tema: auto</button>
   </header>
   <p class="generato" id="generato"></p>
+
+  {# La pagina e' un file aperto con file://: il browser non le permette di
+     eseguire comandi sul computer. Il pulsante quindi non sincronizza, spiega
+     come farlo in un gesto. #}
+  <section class="card nascosto" id="come-aggiornare">
+    <h2>Come aggiornare i dati</h2>
+    <p class="sub">Questa pagina è una fotografia: contiene i dati dentro di sé e
+      resta ferma al momento in cui è stata generata. Per rigenerarla con le sedute
+      nuove serve un comando sul tuo computer — il browser, per sicurezza, non
+      permette a un file locale di eseguirlo da solo.</p>
+    <ol class="passi">
+      <li><b>Doppio click su <code>aggiorna.command</code></b>, nella cartella del
+        progetto. Scarica da Hevy, rigenera questa pagina e la riapre.
+        Puoi trascinarlo nel Dock e tenerlo lì.</li>
+      <li>Oppure dal Terminale, nella cartella del progetto:
+        <code id="comando">make sync</code>
+        <button class="link" type="button" id="copia">copia</button>
+        <span class="assente" id="copiato"></span></li>
+    </ol>
+  </section>
 
   <div class="tiles" id="tiles"></div>
 
@@ -888,6 +913,31 @@ function collegaControlli() {
         x.setAttribute("aria-pressed", String(x === b)));
       gruppiMuscolari();
     });
+  });
+
+  const pannello = document.getElementById("come-aggiornare");
+  const apri = document.getElementById("aggiorna");
+  apri.addEventListener("click", () => {
+    const chiuso = pannello.classList.toggle("nascosto");
+    apri.textContent = chiuso ? "Aggiorna" : "Chiudi";
+    if (!chiuso) pannello.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  });
+  document.getElementById("copia").addEventListener("click", async () => {
+    const testo = document.getElementById("comando").textContent;
+    const esito = document.getElementById("copiato");
+    try {
+      await navigator.clipboard.writeText(testo);
+      esito.textContent = "copiato";
+    } catch {
+      // Su file:// gli appunti possono essere negati: si ripiega sulla selezione.
+      const sel = window.getSelection();
+      const intervallo = document.createRange();
+      intervallo.selectNodeContents(document.getElementById("comando"));
+      sel.removeAllRanges();
+      sel.addRange(intervallo);
+      esito.textContent = "selezionato: premi Cmd+C";
+    }
+    setTimeout(() => { esito.textContent = ""; }, 4000);
   });
 
   const bottone = document.getElementById("tema");

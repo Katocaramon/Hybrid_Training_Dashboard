@@ -63,6 +63,15 @@ export HEVY_API_KEY='la-tua-chiave'   # mettila nel tuo ~/.zshrc
 make sync                              # scarica e rigenera la dashboard
 ```
 
+Oppure **doppio click su `aggiorna.command`** dal Finder: fa le stesse due cose
+e riapre la dashboard, senza passare dal Terminale. Puoi trascinarlo nel Dock.
+Lanciato dal Finder non legge il tuo `~/.zshrc`, quindi se la chiave sta lì
+mettila anche in `~/.strength-tracker.env`:
+
+```
+HEVY_API_KEY=la-tua-chiave
+```
+
 La chiave si genera nelle impostazioni del profilo Hevy, sezione sviluppatore.
 Va in una variabile d'ambiente, **mai nel repository**. La prima volta conviene
 provare a vuoto, che non scrive niente nel database:
