@@ -51,11 +51,30 @@ class Opzioni:
     rigenera: Callable[[sqlite3.Connection], Path]
     host: str = "127.0.0.1"
     porta: int = 8765
+    #: File da cui la dashboard dipende: se uno e' piu' recente dell'HTML
+    #: gia' generato, la pagina va rifatta. Senza questo il server
+    #: servirebbe una pagina vecchia dopo un aggiornamento del codice o una
+    #: modifica alla mappatura, ed e' difficile accorgersene.
+    fonti: tuple[Path, ...] = ()
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     @property
     def url(self) -> str:
         return f"http://{self.host}:{self.porta}/"
+
+
+def va_rigenerata(html: Path, fonti: tuple[Path, ...]) -> bool:
+    """La pagina e' da rifare se manca o se una delle sue fonti e' piu' recente.
+
+    Le fonti sono il database (dati nuovi) e il template (codice nuovo): senza
+    questo controllo il server continuerebbe a servire l'HTML che ha trovato,
+    e un aggiornamento del progetto non si vedrebbe mai.
+    """
+    html = Path(html)
+    if not html.is_file():
+        return True
+    quando = html.stat().st_mtime
+    return any(Path(f).exists() and Path(f).stat().st_mtime > quando for f in fonti)
 
 
 def _crea_gestore(opzioni: Opzioni) -> type[BaseHTTPRequestHandler]:
@@ -94,7 +113,7 @@ def _crea_gestore(opzioni: Opzioni) -> type[BaseHTTPRequestHandler]:
 
         def _manda_dashboard(self) -> None:
             file = Path(opzioni.output_path)
-            if not file.is_file():
+            if va_rigenerata(file, opzioni.fonti):
                 with opzioni._lock:
                     conn = self._connessione()
                     try:

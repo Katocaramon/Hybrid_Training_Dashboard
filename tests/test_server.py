@@ -204,3 +204,56 @@ def test_ascolta_solo_su_localhost(opzioni):
         assert server.server_address[0] == "127.0.0.1"
     finally:
         server.shutdown()
+
+
+# --- freschezza della pagina -----------------------------------------------
+
+
+def test_rigenera_se_il_template_e_piu_recente(opzioni, tmp_path):
+    """Dopo un aggiornamento del progetto non deve servire la pagina vecchia."""
+    import time
+
+    vecchia = Path(opzioni.output_path)
+    vecchia.parent.mkdir(parents=True, exist_ok=True)
+    vecchia.write_text("<html>pagina vecchia</html>", encoding="utf-8")
+    template = tmp_path / "template.j2"
+    template.write_text("x", encoding="utf-8")
+    time.sleep(0.01)
+    template.touch()
+    opzioni.fonti = (template,)
+
+    server = avvia(opzioni)
+    try:
+        stato, corpo = chiedi(opzioni.url)
+        assert stato == 200
+        assert b"pagina vecchia" not in corpo
+        assert b"Strength Tracker" in corpo
+    finally:
+        server.shutdown()
+
+
+def test_non_rigenera_se_e_gia_aggiornata(opzioni, tmp_path):
+    fonte = tmp_path / "fonte"
+    fonte.write_text("x", encoding="utf-8")
+    opzioni.fonti = (fonte,)
+    server = avvia(opzioni)
+    try:
+        chiedi(opzioni.url)  # genera
+        quando = Path(opzioni.output_path).stat().st_mtime
+        chiedi(opzioni.url)  # non deve rigenerare
+        assert Path(opzioni.output_path).stat().st_mtime == quando
+    finally:
+        server.shutdown()
+
+
+def test_va_rigenerata(tmp_path):
+    html = tmp_path / "d.html"
+    fonte = tmp_path / "db.sqlite"
+    assert srv.va_rigenerata(html, ())           # non esiste ancora
+    html.write_text("x", encoding="utf-8")
+    assert not srv.va_rigenerata(html, ())       # nessuna fonte da confrontare
+    fonte.write_text("y", encoding="utf-8")
+    import os
+
+    os.utime(fonte, (os.stat(html).st_mtime + 10,) * 2)
+    assert srv.va_rigenerata(html, (fonte,))     # la fonte e' piu' recente

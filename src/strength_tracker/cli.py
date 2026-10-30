@@ -299,13 +299,17 @@ def cmd_serve(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
 
+    percorso_db = args.db or default_db_path()
     opzioni = server.Opzioni(
-        db_path=args.db or default_db_path(),
+        db_path=percorso_db,
         output_path=uscita,
         sincronizza=sincronizza,
         rigenera=rigenera,
         host=args.host,
         porta=args.port,
+        # Se il database o il template sono piu' recenti della pagina gia'
+        # generata, la pagina viene rifatta prima di servirla.
+        fonti=(percorso_db, dashboard._cerca_asset("templates") / "dashboard.html.j2"),
     )
     server.avvia(opzioni, apri_browser=not args.no_open)
     return 0
