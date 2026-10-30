@@ -207,10 +207,11 @@ footer.note code { font-size: 11.5px; background: var(--surface); border: 1px so
     <div class="due-colonne">
       <figure style="margin:0">
         <figcaption class="sub" id="cap-carico" style="margin-bottom:6px"></figcaption>
-        <div class="grafico basso"><canvas id="g-progressione"></canvas></div>
+        <div class="grafico basso" id="box-progressione"><canvas id="g-progressione"></canvas></div>
+        <p class="vuoto nascosto" id="niente-carico"></p>
       </figure>
       <figure style="margin:0">
-        <figcaption class="sub" style="margin-bottom:6px">Ripetizioni totali per seduta</figcaption>
+        <figcaption class="sub" id="cap-lavoro" style="margin-bottom:6px"></figcaption>
         <div class="grafico basso"><canvas id="g-reps"></canvas></div>
       </figure>
     </div>
@@ -586,7 +587,18 @@ function progressione(nome) {
     pointRadius: punti.map((x) => (x.e1rm_affidabile === false ? 6 : 4))
   });
 
-  disegna("g-progressione", {
+  // Un esercizio senza alcun carico non ha una progressione di peso: una
+  // griglia vuota non e' informazione, una riga che lo dice si'.
+  const senzaCarico = datasets.every((d) => d.data.every((v) => v === null || v === undefined));
+  document.getElementById("box-progressione").classList.toggle("nascosto", senzaCarico);
+  const nota = document.getElementById("niente-carico");
+  nota.classList.toggle("nascosto", !senzaCarico);
+  nota.textContent = senzaCarico
+    ? "Nessun carico registrato per questo esercizio: non c'e' una progressione di peso da mostrare."
+    : "";
+  if (senzaCarico) {
+    if (grafici["g-progressione"]) { grafici["g-progressione"].destroy(); delete grafici["g-progressione"]; }
+  } else disegna("g-progressione", {
     type: "line",
     data: { labels: etichette, datasets },
     options: opzioni({
@@ -610,14 +622,24 @@ function progressione(nome) {
     })
   });
 
+  // Un plank non ha ripetizioni e uno stacco non ha una durata che voglia
+  // dire qualcosa: si mostra la misura che l'esercizio ha davvero.
+  const aTempo = p.misura_lavoro === "durata";
+  document.getElementById("cap-lavoro").textContent = aTempo
+    ? "Tempo sotto tensione per seduta"
+    : "Ripetizioni totali per seduta";
   disegna("g-reps", {
     type: "bar",
-    data: { labels: etichette, datasets: [{ label: "Ripetizioni totali",
-      data: punti.map((x) => x.reps_totali), backgroundColor: serie(2),
+    data: { labels: etichette, datasets: [{
+      label: aTempo ? "Secondi" : "Ripetizioni totali",
+      data: punti.map((x) => (aTempo ? x.durata_totale_s : x.reps_totali)),
+      backgroundColor: serie(2),
       borderRadius: 4, borderSkipped: false, barPercentage: 0.6,
       categoryPercentage: 0.8, maxBarThickness: 46 }] },
     options: opzioni({
-      plugins: { legend: { display: false } },
+      plugins: { legend: { display: false }, tooltip: { callbacks: {
+        label: (c) => (aTempo ? durata(c.raw) : num(c.raw) + " ripetizioni")
+      } } },
       scales: { y: { ticks: { precision: 0 } } }
     })
   });
@@ -637,10 +659,11 @@ function progressione(nome) {
       D.epley_max_reps + " ripetizioni: la formula di Epley li sovrastima."));
   }
 
-  const intestazione = ["Data", "Serie", "Rip. totali",
+  const intestazione = ["Data", "Serie", aTempo ? "Sotto tensione" : "Rip. totali",
     assistenza ? "Assistenza min." : "Peso migliore", "Carico effettivo", "e1RM", "Volume"];
   tabella("t-progressione", intestazione, punti.map((x) => [
-    dataIt(x.local_date), num(x.n_serie), num(x.reps_totali),
+    dataIt(x.local_date), num(x.n_serie),
+    aTempo ? durata(x.durata_totale_s) : num(x.reps_totali),
     kg(assistenza ? x.assistenza_minima_kg : x.peso_migliore_kg),
     x.carico_effettivo_migliore_kg === null ? null
       : NF1.format(x.carico_effettivo_migliore_kg) + " kg" + (p.carico_stimato ? " (stima)" : ""),

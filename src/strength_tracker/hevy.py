@@ -1,4 +1,4 @@
-"""Import degli export CSV di Hevy.
+"""Import dei dati Hevy: export CSV e payload dell'API.
 
 Hevy esporta **una riga per serie**, con il nome dell'esercizio gia' in
 chiaro. Rispetto al FIT dell'orologio si guadagna e si perde:
@@ -28,14 +28,28 @@ Struttura del CSV (verificata su un export reale, settembre 2026):
   raggruppate per (titolo, inizio).
 * Colonne vuote sono vuote per davvero: un plank ha `duration_seconds` e basta,
   un esercizio a corpo libero non ha `weight_kg`.
+
+Il payload dell'**API** (`/v1/workouts`) dice le stesse cose meglio:
+
+* gli orari sono in **UTC vero** con il fuso, non in ora locale muta: si puo'
+  ricostruire sia l'istante sia la data locale;
+* ogni esercizio porta un `exercise_template_id` stabile accanto al titolo;
+* le serie sono annidate dentro gli esercizi, con `type` che distingue le
+  serie di riscaldamento (`warmup`) da quelle vere (`normal`);
+* `supersets_id` e `distance_meters` al posto di `superset_id` e `distance_km`.
+
+Le due strade producono lo **stesso** `session_uid` per lo stesso allenamento
+(titolo piu' ora locale al minuto), cosi' passare dal CSV all'API non duplica
+niente.
 """
 
 from __future__ import annotations
 
 import csv
 import hashlib
+import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -108,6 +122,189 @@ def exercise_key(titolo: str) -> str:
     confonderlo con uno slug del catalogo Garmin.
     """
     return PREFISSO + titolo.strip()
+
+
+def session_uid(titolo: str, inizio_locale: datetime) -> str:
+    """Identita' di un allenamento Hevy: titolo e ora locale al minuto.
+
+    Il troncamento al minuto e' quello che fa combaciare le due strade: il CSV
+    scrive gli orari senza secondi, l'API al secondo. Senza, lo stesso
+    allenamento importato prima da CSV e poi da API entrerebbe due volte.
+    """
+    minuto = inizio_locale.replace(second=0, microsecond=0, tzinfo=None)
+    impronta = hashlib.sha256(f"{titolo}|{minuto.isoformat()}".encode()).hexdigest()[:12]
+    return f"hevy:{minuto.strftime('%Y%m%dT%H%M')}:{impronta}"
+
+
+def fuso_locale(nome: str | None = None) -> tzinfo:
+    """Fuso con cui leggere gli orari UTC dell'API.
+
+    Hevy registra l'istante in UTC ma non dice in che fuso ti sei allenato.
+    Si usa quello del computer, che per un attrezzo locale e' la risposta
+    giusta; `STRENGTH_TRACKER_TZ` lo sovrascrive (serve anche ai test).
+    """
+    import os
+
+    nome = nome or os.environ.get("STRENGTH_TRACKER_TZ")
+    if not nome:
+        return datetime.now().astimezone().tzinfo or timezone.utc
+    from zoneinfo import ZoneInfo
+
+    return ZoneInfo(nome)
+
+
+def e_un_json_hevy(dati: Any) -> bool:
+    """Riconosce un payload dell'API Hevy gia' caricato."""
+    if not isinstance(dati, dict):
+        return False
+    if isinstance(dati.get("workout"), dict):
+        return "exercises" in dati["workout"]
+    if isinstance(dati.get("workouts"), list):
+        return all(isinstance(w, dict) and "exercises" in w for w in dati["workouts"])
+    return "exercises" in dati and "start_time" in dati
+
+
+def parse_json(path: Path, fuso: tzinfo | None = None) -> list[ParsedActivity]:
+    """Legge un payload dell'API Hevy salvato su file."""
+    path = Path(path)
+    try:
+        dati = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise FitSkipped(f"JSON illeggibile ({exc.__class__.__name__}: {exc})") from exc
+    if not e_un_json_hevy(dati):
+        raise FitSkipped("non e' un payload di allenamenti Hevy")
+    return parse_api_payload(dati, source_path=path, fuso=fuso)
+
+
+def parse_api_payload(
+    dati: Any, *, source_path: Path, fuso: tzinfo | None = None, digest: str = ""
+) -> list[ParsedActivity]:
+    """Converte la risposta dell'API Hevy in attivita'.
+
+    Accetta sia `{"workout": {...}}` sia `{"workouts": [...]}` sia il singolo
+    allenamento nudo: sono le tre forme che l'API e i suoi wrapper usano.
+    """
+    fuso = fuso or fuso_locale()
+    if isinstance(dati.get("workout"), dict):
+        grezzi = [dati["workout"]]
+    elif isinstance(dati.get("workouts"), list):
+        grezzi = dati["workouts"]
+    else:
+        grezzi = [dati]
+
+    attivita: list[ParsedActivity] = []
+    for w in grezzi:
+        try:
+            attivita.append(_da_api(w, Path(source_path), digest, fuso))
+        except (ValueError, KeyError, TypeError) as exc:
+            log.warning("salto l'allenamento %r: %s", w.get("title"), exc)
+    if not attivita:
+        raise FitSkipped("nessun allenamento leggibile nel payload")
+    return attivita
+
+
+def _istante(valore: str | None) -> datetime | None:
+    """ISO 8601 dell'API -> datetime con fuso."""
+    if not valore:
+        return None
+    testo = valore.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(testo)
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _da_api(w: dict[str, Any], source_path: Path, digest: str, fuso: tzinfo) -> ParsedActivity:
+    titolo = (w.get("title") or "").strip()
+    inizio = _istante(w.get("start_time"))
+    if inizio is None:
+        raise ValueError(f"allenamento {w.get('id')!r} senza start_time valido")
+    fine = _istante(w.get("end_time"))
+    locale = inizio.astimezone(fuso)
+
+    avvisi: list[str] = []
+    serie: list[SetRecord] = []
+    for esercizio in w.get("exercises") or []:
+        nome = (esercizio.get("title") or "").strip()
+        if not nome:
+            avvisi.append("esercizio senza titolo, saltato")
+            continue
+        superset = esercizio.get("supersets_id")
+        for s in esercizio.get("sets") or []:
+            distanza_m = s.get("distance_meters")
+            serie.append(
+                SetRecord(
+                    # Come per il CSV: l'ordine nella seduta, non l'indice di
+                    # Hevy, che riparte a ogni esercizio.
+                    index=len(serie),
+                    set_type="active",
+                    start_time=None,  # l'API non da' l'orario della singola serie
+                    duration_s=_numero_grezzo(s.get("duration_seconds")),
+                    repetitions=_intero_grezzo(s.get("reps")),
+                    weight_kg=_numero_grezzo(s.get("weight_kg")),
+                    weight_display_unit="kilogram",
+                    category_raw=(),
+                    subcategory_raw=(),
+                    exercise_key=exercise_key(nome),
+                    exercise_label=nome,
+                    wkt_step_index=None,
+                    rpe=_numero_grezzo(s.get("rpe")),
+                    superset_id=None if superset is None else str(superset),
+                    set_kind=(s.get("type") or "").strip() or None,
+                    distance_km=None if distanza_m is None else float(distanza_m) / 1000,
+                )
+            )
+    if not serie:
+        raise ValueError(f"allenamento {titolo!r} senza serie")
+
+    durata = (fine - inizio).total_seconds() if fine else None
+    if durata is not None and durata <= 0:
+        avvisi.append("fine non successiva all'inizio: durata ignorata")
+        durata = None
+
+    offset = locale.utcoffset()
+    sessione = SessionRecord(
+        start_time=inizio,  # istante vero, in UTC
+        total_elapsed_s=durata,
+        total_timer_s=None,  # Hevy non ferma un cronometro durante le pause
+        avg_hr=None,
+        max_hr=None,
+        calories=None,
+        sport="training",
+        sub_sport="strength_training",
+        sport_profile_name="Hevy",
+        workout_name=titolo or None,
+        total_training_effect=None,
+        utc_offset_s=int(offset.total_seconds()) if offset else 0,
+        body_weight_kg=None,
+        source="hevy",
+    )
+    return ParsedActivity(
+        source_path=source_path,
+        file_sha256=digest,
+        garmin_activity_id=None,
+        device=DeviceInfo(manufacturer="hevy", product=None, serial_number=None, time_created=None),
+        session=sessione,
+        sets=serie,
+        hr_samples=[],
+        warnings=avvisi,
+        uid_override=session_uid(titolo, locale),
+    )
+
+
+def _numero_grezzo(valore: Any) -> float | None:
+    if valore is None or valore == "":
+        return None
+    try:
+        return float(valore)
+    except (TypeError, ValueError):
+        return None
+
+
+def _intero_grezzo(valore: Any) -> int | None:
+    n = _numero_grezzo(valore)
+    return int(n) if n is not None else None
 
 
 def parse_csv(path: Path) -> list[ParsedActivity]:
@@ -242,5 +439,7 @@ def _costruisci(
         sets=serie,
         hr_samples=[],
         warnings=avvisi,
-        uid_override=f"hevy:{inizio.strftime('%Y%m%dT%H%M')}:{impronta}",
+        # Stesso uid che produrrebbe l'API per questo allenamento: reimportare
+        # l'export completo, o passare all'API, non duplica niente.
+        uid_override=session_uid(titolo, inizio),
     )

@@ -127,6 +127,7 @@ exercises:
     match:
       - banded_exercises/glute_bridge
       - "hevy:Glute Bridge"
+      - "hevy:Single Leg Glute Bridge"
 
   - name: Passi laterali con elastico
     primary: glutei
@@ -150,6 +151,7 @@ exercises:
     match:
       - lunge/lunge
       - "hevy:Lunge"
+      - "hevy:Reverse Lunge"
 
   - name: Hip thrust
     primary: glutei
@@ -166,6 +168,7 @@ exercises:
     match:
       - leg_curl/weighted_leg_curl
       - leg_curl/leg_curl
+      - "hevy:Seated Leg Curl (Machine)"
 
   - name: Abduzione anca
     primary: abduttori
@@ -182,6 +185,7 @@ exercises:
       - calf_raise/single_leg_standing_calf_raise
       - calf_raise/standing_calf_raise
       - "hevy:Standing Calf Raise (Dumbbell)"
+      - "hevy:Seated Calf Raise"
 
   # ---- altri esercizi gia' visti nelle sedute ------------------------------
   # Presi dalla seduta "Day 1 Upper Body" del 01/09/2026.
@@ -287,6 +291,38 @@ exercises:
     weight_mode: corpo_libero
     match: ["hevy:Nordic Hamstrings Curls"]
 
+  - name: Single leg box squat
+    primary: quadricipiti
+    secondary: [glutei]
+    # registrato con peso 0: e' a corpo libero, non un carico mancante
+    weight_mode: corpo_libero
+    match: ["hevy:Single Leg Box Squat"]
+
+  - name: Box jump
+    primary: quadricipiti
+    secondary: [glutei]
+    weight_mode: corpo_libero
+    match: ["hevy:Box Jump"]
+
+  - name: Hanging knee raise
+    primary: core
+    secondary: []
+    weight_mode: corpo_libero
+    match: ["hevy:Hanging Knee Raise"]
+
+  - name: Push up
+    primary: petto
+    secondary: [tricipiti, spalle]
+    weight_mode: corpo_libero
+    match: ["hevy:Push Up"]
+
+  - name: Suitcase carry
+    primary: core
+    secondary: [avambracci]
+    # NB: registrato a 0 kg, che per un suitcase carry non ha senso.
+    # Resta `carico` apposta, cosi' lo zero finisce fra le anomalie.
+    match: ["hevy:Suitcase Carry (Dumbbell)"]
+
   - name: Seated row
     primary: dorsali
     secondary: [bicipiti]
@@ -295,7 +331,10 @@ exercises:
   - name: Hammer curl
     primary: bicipiti
     secondary: []
-    match: ["hevy:Hammer Curl (Cable)"]
+    # cavo fino al 21/09, manubri da fine settembre: stesso esercizio
+    match:
+      - "hevy:Hammer Curl (Cable)"
+      - "hevy:Hammer Curl (Dumbbell)"
 
 # Gruppi sotto osservazione speciale in dashboard: sono quelli a rischio di
 # interferenza con il carico di corsa.

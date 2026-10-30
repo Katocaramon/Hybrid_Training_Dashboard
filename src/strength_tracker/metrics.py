@@ -272,7 +272,8 @@ def progressione(conn: sqlite3.Connection, esercizio: str) -> dict[str, Any]:
     righe = _rows(
         conn,
         """SELECT local_date, session_id, weight_mode,
-                  reps, weight_kg, carico_effettivo_kg, volume_kg, carico_stimato
+                  reps, weight_kg, duration_s, carico_effettivo_kg, volume_kg,
+                  carico_stimato
            FROM v_sets
            WHERE set_type = 'active' AND exercise_name = ?
            ORDER BY local_date, order_in_session""",
@@ -287,6 +288,9 @@ def progressione(conn: sqlite3.Connection, esercizio: str) -> dict[str, Any]:
                 "weight_mode": r["weight_mode"],
                 "n_serie": 0,
                 "reps_totali": 0,
+                # Per gli esercizi a tempo (plank, carry) le ripetizioni non
+                # esistono: a misurare il lavoro e' la durata.
+                "durata_totale_s": 0.0,
                 "peso_migliore_kg": None,
                 "carico_effettivo_migliore_kg": None,
                 "assistenza_minima_kg": None,
@@ -301,6 +305,8 @@ def progressione(conn: sqlite3.Connection, esercizio: str) -> dict[str, Any]:
             d["serie_senza_dati"] += 1
         else:
             d["reps_totali"] += r["reps"]
+        if r["duration_s"]:
+            d["durata_totale_s"] += r["duration_s"]
         if r["weight_kg"] is not None:
             d["peso_migliore_kg"] = max(d["peso_migliore_kg"] or 0.0, r["weight_kg"])
             if r["weight_mode"] == "assistenza":
@@ -321,6 +327,12 @@ def progressione(conn: sqlite3.Connection, esercizio: str) -> dict[str, Any]:
         "esercizio": esercizio,
         "weight_mode": righe[0]["weight_mode"] if righe else "carico",
         "carico_stimato": stimato,
+        # Dice quale delle due misure di lavoro ha senso mostrare: un plank
+        # non ha ripetizioni, uno stacco non ha una durata significativa.
+        "misura_lavoro": (
+            "reps" if any(p["reps_totali"] for p in punti)
+            else ("durata" if any(p["durata_totale_s"] for p in punti) else "nessuna")
+        ),
         "punti": punti,
     }
 

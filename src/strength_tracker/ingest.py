@@ -1,9 +1,9 @@
 """Orchestrazione dell'ingestione.
 
-Due sorgenti, un comando solo: i `.fit` dell'orologio e i `.csv` esportati da
-Hevy finiscono nella stessa cartella e `ingest` riconosce il formato
-dall'estensione. Un export Hevy contiene piu' allenamenti, quindi un singolo
-file puo' produrre piu' sedute.
+Due sorgenti, un comando solo: i `.fit` dell'orologio e i dati di Hevy — CSV
+esportato dall'app o payload JSON dell'API — finiscono nella stessa cartella e
+`ingest` riconosce il formato dall'estensione. Un export Hevy contiene piu'
+allenamenti, quindi un singolo file puo' produrre piu' sedute.
 
 `ingest` e' idempotente su tre livelli:
 
@@ -105,9 +105,17 @@ def ingest_path(
 
 
 def _leggi(file: Path) -> list[ParsedActivity]:
-    """Legge una sorgente. Un `.fit` da' una seduta, un CSV Hevy anche tante."""
-    if file.suffix.lower() == ".csv":
+    """Legge una sorgente.
+
+    Un `.fit` da' una seduta; un CSV o un payload JSON di Hevy anche tante.
+    """
+    suffisso = file.suffix.lower()
+    if suffisso == ".csv":
         from .hevy import parse_csv
 
         return parse_csv(file)
+    if suffisso == ".json":
+        from .hevy import parse_json
+
+        return parse_json(file)
     return [parse_file(file)]

@@ -311,3 +311,185 @@ def test_cli_ingest_e_stats_su_hevy(tmp_path, export, capsys):
     out = capsys.readouterr().out
     assert "1 hevy" in out
     assert "21/09/2026" in out
+
+
+# =========================================================================
+# payload dell'API
+# =========================================================================
+
+#: Stessa forma del payload reale di `/v1/workouts`: serie annidate dentro
+#: gli esercizi, orari in UTC, `supersets_id` e `distance_meters`.
+def payload_api(**extra):
+    w = {
+        "id": "e4810419-6391-4556-9924-508a20534c1f",
+        "title": "Day 2 - Lower Body",
+        "start_time": "2026-09-24T04:00:38+00:00",
+        "end_time": "2026-09-24T05:23:31+00:00",
+        "exercises": [
+            {
+                "index": 0,
+                "title": "Rowing Machine",
+                "exercise_template_id": "0222DB42",
+                "sets": [{"index": 0, "type": "normal", "distance_meters": 1500,
+                          "duration_seconds": 360}],
+            },
+            {
+                "index": 1,
+                "title": "Deadlift (Trap bar)",
+                "exercise_template_id": "B923B230",
+                "sets": [
+                    {"index": 0, "type": "warmup", "weight_kg": 40, "reps": 5},
+                    {"index": 1, "type": "normal", "weight_kg": 70, "reps": 5},
+                ],
+            },
+            {
+                "index": 2,
+                "title": "Copenhagen plank",
+                "exercise_template_id": "f3e4b7ac",
+                "supersets_id": 3,
+                "sets": [{"index": 0, "type": "normal", "duration_seconds": 32}],
+            },
+        ],
+    }
+    w.update(extra)
+    return {"workout": w}
+
+
+@pytest.fixture
+def roma(monkeypatch):
+    """Gli orari dell'API sono UTC: serve un fuso per datarli."""
+    monkeypatch.setenv("STRENGTH_TRACKER_TZ", "Europe/Rome")
+
+
+def scrivi_json(path: Path, dati) -> Path:
+    import json
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(dati), encoding="utf-8")
+    return path
+
+
+def test_riconosce_il_payload_api():
+    assert hevy.e_un_json_hevy(payload_api())
+    assert hevy.e_un_json_hevy({"workouts": [payload_api()["workout"]]})
+    assert hevy.e_un_json_hevy(payload_api()["workout"])
+    assert not hevy.e_un_json_hevy({"qualcosa": "altro"})
+
+
+def test_parse_api_struttura(roma, tmp_path):
+    a = hevy.parse_json(scrivi_json(tmp_path / "w.json", payload_api()))[0]
+    assert a.session.source == "hevy"
+    assert a.session.workout_name == "Day 2 - Lower Body"
+    assert len(a.sets) == 4  # 1 + 2 + 1, appiattite in ordine di seduta
+    assert [s.index for s in a.sets] == [0, 1, 2, 3]
+    assert a.hr_samples == []
+
+
+def test_parse_api_orari_in_utc_con_fuso_locale(roma, tmp_path):
+    a = hevy.parse_json(scrivi_json(tmp_path / "w.json", payload_api()))[0]
+    # 04:00 UTC in settembre = 06:00 a Roma (ora legale)
+    assert a.session.start_time.hour == 4
+    assert a.session.utc_offset_s == 7200
+    assert a.session.start_time_local.strftime("%Y-%m-%d %H:%M") == "2026-09-24 06:00"
+
+
+def test_parse_api_ora_solare(roma, tmp_path):
+    """Dopo il cambio d'ora l'offset e' diverso: lo dice il fuso, non noi."""
+    dati = payload_api(start_time="2026-10-29T05:48:54+00:00",
+                       end_time="2026-10-29T07:13:19+00:00")
+    a = hevy.parse_json(scrivi_json(tmp_path / "w.json", dati))[0]
+    assert a.session.utc_offset_s == 3600
+    assert a.session.start_time_local.strftime("%H:%M") == "06:48"
+
+
+def test_api_e_csv_danno_lo_stesso_uid(roma, tmp_path):
+    """Passare dal CSV all'API non deve duplicare le sedute."""
+    da_api = hevy.parse_json(scrivi_json(tmp_path / "w.json", payload_api()))[0]
+    da_csv = hevy.parse_csv(
+        scrivi_csv(
+            tmp_path / "w.csv",
+            [riga("Day 2 - Lower Body", "Sep 24, 2026 at 6:00 AM",
+                  "Sep 24, 2026 at 7:23 AM", "Deadlift (Trap bar)", 0,
+                  weight_kg="70", reps="5")],
+        )
+    )[0]
+    assert da_api.session_uid == da_csv.session_uid
+
+
+def test_parse_api_campi_delle_serie(roma, tmp_path):
+    a = hevy.parse_json(scrivi_json(tmp_path / "w.json", payload_api()))[0]
+    vogatore, riscaldamento, lavoro, plank = a.sets
+    assert vogatore.duration_s == 360 and vogatore.distance_km == pytest.approx(1.5)
+    assert riscaldamento.set_kind == "warmup"   # distinguibile dalle serie vere
+    assert (lavoro.weight_kg, lavoro.repetitions) == (70.0, 5)
+    assert lavoro.volume_kg == pytest.approx(350.0)
+    assert plank.superset_id == "3" and plank.duration_s == 32
+    assert plank.repetitions is None
+    assert all(s.exercise_key.startswith("hevy:") for s in a.sets)
+
+
+def test_parse_api_piu_allenamenti(roma, tmp_path):
+    primo = payload_api()["workout"]
+    secondo = dict(primo, id="altro", title="Day 1", start_time="2026-09-21T04:25:08+00:00",
+                   end_time="2026-09-21T05:39:25+00:00")
+    attivita = hevy.parse_json(scrivi_json(tmp_path / "w.json", {"workouts": [primo, secondo]}))
+    assert len(attivita) == 2
+    assert len({a.session_uid for a in attivita}) == 2
+
+
+def test_allenamento_senza_orario_saltato_senza_fermare_gli_altri(roma, tmp_path):
+    rotto = dict(payload_api()["workout"], id="rotto", start_time=None)
+    buono = payload_api()["workout"]
+    attivita = hevy.parse_json(scrivi_json(tmp_path / "w.json", {"workouts": [rotto, buono]}))
+    assert len(attivita) == 1
+
+
+def test_json_non_hevy_saltato(tmp_path):
+    with pytest.raises(FitSkipped, match="non e' un payload"):
+        hevy.parse_json(scrivi_json(tmp_path / "x.json", {"foo": [1, 2]}))
+
+
+def test_json_malformato_saltato(tmp_path):
+    rotto = tmp_path / "x.json"
+    rotto.write_text("{non json", encoding="utf-8")
+    with pytest.raises(FitSkipped, match="JSON illeggibile"):
+        hevy.parse_json(rotto)
+
+
+def test_ingestione_del_payload_api(conn, roma, tmp_path):
+    cartella = tmp_path / "fit"
+    scrivi_json(cartella / "api.json", payload_api())
+    rep = ingest_path(conn, cartella)
+    assert len(rep.ingested) == 1 and rep.sets_written == 4
+    r = conn.execute("SELECT source, local_date FROM sessions").fetchone()
+    assert (r["source"], r["local_date"]) == ("hevy", "2026-09-24")
+
+
+def test_csv_e_json_dello_stesso_allenamento_non_si_duplicano(conn, roma, tmp_path):
+    cartella = tmp_path / "fit"
+    scrivi_json(cartella / "api.json", payload_api())
+    scrivi_csv(
+        cartella / "export.csv",
+        [riga("Day 2 - Lower Body", "Sep 24, 2026 at 6:00 AM",
+              "Sep 24, 2026 at 7:23 AM", "Deadlift (Trap bar)", 0,
+              weight_kg="70", reps="5")],
+    )
+    ingest_path(conn, cartella)
+    assert conn.execute("SELECT COUNT(*) c FROM sessions").fetchone()["c"] == 1
+
+
+def test_misura_del_lavoro_per_esercizi_a_tempo(conn, roma, tmp_path):
+    """Un plank non ha ripetizioni: a misurarlo e' il tempo sotto tensione."""
+    cartella = tmp_path / "fit"
+    scrivi_json(cartella / "api.json", payload_api())
+    ingest_path(conn, cartella)
+    db.refresh_exercise_map(conn, load_mapping(MAPPATURA).as_rows())
+
+    plank = mt.progressione(conn, "Copenhagen plank")
+    assert plank["misura_lavoro"] == "durata"
+    assert plank["punti"][0]["durata_totale_s"] == pytest.approx(32.0)
+    assert plank["punti"][0]["reps_totali"] == 0
+
+    stacco = mt.progressione(conn, "Trap bar deadlift")
+    assert stacco["misura_lavoro"] == "reps"
+    assert stacco["punti"][0]["reps_totali"] == 10  # 5 di riscaldamento + 5

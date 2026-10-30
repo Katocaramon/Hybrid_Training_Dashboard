@@ -53,8 +53,9 @@ log = logging.getLogger(__name__)
 #: Estensioni considerate file FIT durante la scansione ricorsiva.
 FIT_SUFFIXES = {".fit"}
 
-#: Estensioni di tutte le sorgenti riconosciute (.fit dall'orologio, .csv da Hevy).
-SOURCE_SUFFIXES = FIT_SUFFIXES | {".csv"}
+#: Estensioni di tutte le sorgenti riconosciute: .fit dall'orologio, .csv
+#: dall'export di Hevy, .json dal payload dell'API di Hevy.
+SOURCE_SUFFIXES = FIT_SUFFIXES | {".csv", ".json"}
 
 #: Nome file dell'export Garmin Connect: `<activity_id>_ACTIVITY.fit`.
 _ACTIVITY_ID_RE = re.compile(r"(\d{6,})[_-]?ACTIVITY", re.IGNORECASE)

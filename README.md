@@ -127,8 +127,20 @@ marks which values came from the file and which from you.
 
 ## The two sources
 
-`ingest` detects the format from the extension and fills the same tables. A Hevy
-CSV contains every workout, so a single file can produce many sessions.
+`ingest` detects the format from the extension and fills the same tables. Hevy
+data comes in two shapes — the **CSV** the app exports and the **JSON** of the
+API (`/v1/workouts`) — and both go through the same parser. Each contains every
+workout, so a single file can produce many sessions.
+
+The API payload says the same things better than the CSV: timestamps in **real
+UTC** rather than mute local time, a stable `exercise_template_id` alongside the
+title, and each set's type (`normal` or `warmup`). UTC timestamps are dated in
+the computer's timezone — `STRENGTH_TRACKER_TZ` overrides it — because Hevy
+doesn't record which zone you trained in.
+
+Both routes produce the **same** `session_uid` for the same workout (title plus
+local time to the minute): moving from CSV to API duplicates nothing, and a test
+enforces it.
 
 | | Garmin `.fit` | Hevy `.csv` |
 | --- | --- | --- |
@@ -138,7 +150,7 @@ CSV contains every workout, so a single file can produce many sessions.
 | Rest durations | yes | absent |
 | Active time | `total_timer_time` | absent (only start–end) |
 | Time zone | from the device | absent: local time with no offset |
-| Exercise name | numeric catalogue index | plain text |
+| Exercise name | numeric catalogue index | plain text (plus a stable id, via the API) |
 
 What's missing is **never estimated**: for Hevy sessions HR drift and the
 work/rest ratio stay `NULL`, and density is computed on total time rather than
@@ -349,7 +361,8 @@ applied. Every assumption is written down here rather than buried in the code.
 | **Density** | tonnage / active time | Active time = `session.total_timer_time`. Hevy has none, so total time is used and the row declares it in `densita_base` |
 | **Work/rest** | Σ active set duration / Σ rest duration | From the `set` messages. Unrecorded rests are not estimated, and Hevy carries none at all: `NULL` for those sessions |
 | **HR drift** | avg HR of the last third of sets − the first third | A crude fatigue proxy: it also rises simply because the session warms you up. Needs ≥3 sets with HR, otherwise `NULL` |
-| **Sets per group** | count of active sets per ISO week | More robust than tonnage when exercises change or load isn't measurable |
+| **Sets per group** | count of active sets per ISO week | More robust than tonnage when exercises change or load isn't measurable. Hevy's warm-up sets (`set_kind = warmup`) are counted like any other |
+| **Work measure** | total reps, or time under tension | Chosen per exercise: a plank has no reps, a deadlift has no meaningful duration. The dashboard shows whichever the exercise actually has |
 | **Moving average** | 4-week mean of weekly volume | Computed **only over weeks that have data**: a week without training isn't worth zero, or the average would collapse for no reason |
 
 Per-set HR comes from intersecting the 1 Hz samples with each set's time

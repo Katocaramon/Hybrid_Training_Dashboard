@@ -124,9 +124,21 @@ segnala quali valori vengono dal file e quali da te.
 
 ## Le due sorgenti
 
-`ingest` riconosce il formato dall'estensione e riempie le stesse tabelle. Un
-CSV di Hevy contiene tutti gli allenamenti, quindi un file solo puo' produrre
-molte sedute.
+`ingest` riconosce il formato dall'estensione e riempie le stesse tabelle. I
+dati di Hevy arrivano in due forme — il **CSV** esportato dall'app e il
+**JSON** dell'API (`/v1/workouts`) — e passano dallo stesso parser. Entrambe
+contengono tutti gli allenamenti, quindi un file solo puo' produrre molte
+sedute.
+
+Il payload dell'API dice le stesse cose meglio del CSV: orari in **UTC vero**
+invece che in ora locale muta, un `exercise_template_id` stabile accanto al
+titolo, e il tipo di ogni serie (`normal` o `warmup`). Gli orari UTC vengono
+datati nel fuso del computer — `STRENGTH_TRACKER_TZ` lo sovrascrive — perche'
+Hevy non registra in che fuso ti sei allenato.
+
+Le due strade producono lo **stesso** `session_uid` per lo stesso allenamento
+(titolo piu' ora locale al minuto): passare dal CSV all'API non duplica niente,
+e c'e' un test che lo verifica.
 
 | | Garmin `.fit` | Hevy `.csv` |
 | --- | --- | --- |
@@ -136,7 +148,7 @@ molte sedute.
 | Durata delle pause | sì | assente |
 | Tempo attivo | `total_timer_time` | assente (c'è solo inizio–fine) |
 | Fuso orario | dal dispositivo | assente: l'ora è locale, senza offset |
-| Nome esercizio | indice numerico del catalogo | testo in chiaro |
+| Nome esercizio | indice numerico del catalogo | testo in chiaro (piu' un id stabile, via API) |
 
 Quello che manca **non viene stimato**: per le sedute Hevy la deriva della FC e
 il rapporto lavoro/riposo restano `NULL`, e la densità si calcola sul tempo
@@ -349,7 +361,8 @@ Ogni assunzione è qui, non nascosta nel codice.
 | **Densità** | tonnellaggio / tempo attivo | Tempo attivo = `session.total_timer_time`. Hevy non ce l'ha: lì si usa il tempo totale e la riga lo dichiara in `densita_base` |
 | **Lavoro/riposo** | Σ durata serie attive / Σ durata pause | Dai messaggi `set`. Le pause non registrate non vengono stimate, e Hevy non le contiene affatto: per quelle sedute resta `NULL` |
 | **Deriva FC** | FC media ultimo terzo − primo terzo delle serie | Proxy grezzo di fatica: sale anche solo perché la seduta scalda. Servono ≥3 serie con FC, altrimenti `NULL` |
-| **Serie per gruppo** | conteggio serie attive per settimana ISO | Più robusta del tonnellaggio quando gli esercizi cambiano o il carico non è misurabile |
+| **Serie per gruppo** | conteggio serie attive per settimana ISO | Più robusta del tonnellaggio quando gli esercizi cambiano o il carico non è misurabile. Le serie di riscaldamento di Hevy (`set_kind = warmup`) sono contate come le altre |
+| **Misura del lavoro** | ripetizioni totali, oppure tempo sotto tensione | Scelta per esercizio: un plank non ha ripetizioni, uno stacco non ha una durata che voglia dire qualcosa. La dashboard mostra quella che l'esercizio ha davvero |
 | **Media mobile** | media 4 settimane sul volume | Calcolata **solo sulle settimane con dati**: una settimana senza allenamento non vale zero, altrimenti la media crollerebbe per finta |
 
 La FC per serie si ottiene incrociando i campioni a 1 Hz con la finestra
