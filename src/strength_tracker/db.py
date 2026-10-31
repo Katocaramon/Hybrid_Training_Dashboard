@@ -41,7 +41,7 @@ from typing import Any, Iterable
 
 from .fit_parser import ParsedActivity
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 # Migrazione 1: schema iniziale.
 _MIGRATION_1 = """
@@ -290,7 +290,25 @@ CREATE TABLE IF NOT EXISTS sync_state (
 ) WITHOUT ROWID;
 """
 
-_MIGRATIONS = [_MIGRATION_1, _MIGRATION_2, _MIGRATION_3, _MIGRATION_4, _MIGRATION_5]
+# Migrazione 6: eta' fitness, accanto al resto dello stato quotidiano.
+#
+# Garmin la ricalcola di continuo e la espone un giorno per volta. Tenerla in
+# `wellness` invece che in un campo unico "ultimo valore" costa una colonna e
+# regala l'andamento: fra sei mesi si potra' vedere se e' scesa.
+_MIGRATION_6 = """
+ALTER TABLE wellness ADD COLUMN fitness_age REAL;
+ALTER TABLE wellness ADD COLUMN chronological_age INTEGER;
+ALTER TABLE wellness ADD COLUMN vo2max REAL;
+"""
+
+_MIGRATIONS = [
+    _MIGRATION_1,
+    _MIGRATION_2,
+    _MIGRATION_3,
+    _MIGRATION_4,
+    _MIGRATION_5,
+    _MIGRATION_6,
+]
 
 # L'ultima correzione per ogni serie.
 _VIEWS = """
@@ -448,7 +466,12 @@ SELECT ses.id                AS session_id,
        d.training_load,
        d.aerobic_te,
        d.anaerobic_te,
-       d.vo2max
+       d.vo2max,
+       d.best_1000_s,
+       d.best_1609_s,
+       d.best_5000_s,
+       d.best_10000_s,
+       d.best_21098_s
 FROM sessions ses
 JOIN endurance_details d ON d.session_id = ses.id;
 
@@ -898,6 +921,9 @@ _COLONNE_WELLNESS = (
     "stress_avg",
     "body_weight_kg",
     "steps",
+    "fitness_age",
+    "chronological_age",
+    "vo2max",
 )
 
 

@@ -66,11 +66,12 @@ header.top { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; m
 header.top h1 { font-size: 19px; font-weight: 650; margin: 0; letter-spacing: -0.01em; }
 header.top .periodo { color: var(--ink-2); font-size: 13px; }
 header.top .spacer { flex: 1; }
-button.tema {
+button.tema, a.tema {
   border: 1px solid var(--bordo); background: var(--surface); color: var(--ink-2);
   border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer;
 }
-button.tema:hover { color: var(--ink); }
+a.tema { text-decoration: none; }
+button.tema:hover, a.tema:hover { color: var(--ink); }
 .generato { color: var(--muted); font-size: 12px; margin: 0 0 22px; }
 
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(158px, 1fr)); gap: 1px;
@@ -157,6 +158,7 @@ footer.note code { font-size: 11.5px; background: var(--surface); border: 1px so
     <h1>Strength Tracker</h1>
     <span class="periodo" id="periodo"></span>
     <span class="spacer"></span>
+    <a class="tema" id="vai-corsa" href="corsa" hidden>Corsa e recupero &rarr;</a>
     <button class="tema" id="aggiorna" type="button">Aggiorna</button>
     <button class="tema" id="tema" type="button" title="Cambia tema">Tema: auto</button>
   </header>
@@ -938,6 +940,8 @@ function collegaControlli() {
   }
 
   if (servita) {
+    // L'altra pagina esiste solo quando c'e' il server che la genera.
+    document.getElementById("vai-corsa").hidden = false;
     document.getElementById("istruzioni-file").classList.add("nascosto");
     document.getElementById("istruzioni-servita").classList.remove("nascosto");
     apri.textContent = "Sincronizza";

@@ -66,8 +66,10 @@ class FintaGarmin:
     dice solo una chiamata reale, ed e' a questo che serve `--dry-run`.
     """
 
-    def __init__(self, attivita=(), giornalieri=None, hrv=None, sonno=None, peso=None):
+    def __init__(self, attivita=(), giornalieri=None, hrv=None, sonno=None, peso=None,
+                 profilo=None):
         self.attivita = list(attivita)
+        self.profilo = profilo
         self.giornalieri = giornalieri or {}
         self.hrv = hrv or {}
         self.sonno = sonno or {}
@@ -92,6 +94,10 @@ class FintaGarmin:
             if frammento in url and quante > 0:
                 self.errori[frammento] = (status, quante - 1)
                 raise gm.GarminError(f"finto {status}", status)
+        if "/fitnessage-service/" in url:
+            if self.profilo is None:
+                raise gm.GarminError("niente eta' fitness", 404)
+            return json.dumps(self.profilo).encode()
         if "/activitylist-service/" in url:
             inizio = int(url.split("start=")[1].split("&")[0])
             limite = int(url.split("limit=")[1].split("&")[0])
@@ -685,3 +691,30 @@ def test_cli_import_garmin(tmp_path, storico, capsys):
     uscita = capsys.readouterr().out
     assert "Attivita' lette:     2" in uscita
     assert "Giorni di benessere: 2 nuovi" in uscita
+
+
+def test_eta_fitness_finisce_nel_giorno(conn):
+    finta = FintaGarmin(
+        attivita=[attivita()],
+        profilo={"fitnessAge": {"fitnessAge": 31.4, "chronologicalAge": 41, "vo2MaxRunning": 52.3}},
+    )
+    sincronizza(conn, finta)
+    riga = conn.execute("SELECT * FROM wellness WHERE day = '2026-03-15'").fetchone()
+    assert riga["fitness_age"] == pytest.approx(31.4)
+    assert riga["chronological_age"] == 41
+    assert riga["vo2max"] == pytest.approx(52.3)
+
+
+def test_senza_eta_fitness_non_si_inventa_niente(conn):
+    """Garmin risponde 404 su quella data: il campo resta assente, non a zero."""
+    sincronizza(conn, FintaGarmin(attivita=[attivita()], profilo=None))
+    assert conn.execute("SELECT COUNT(fitness_age) c FROM wellness").fetchone()["c"] == 0
+
+
+def test_profilo_dell_altro_progetto(conn, storico):
+    (storico / "profile.json").write_text(
+        json.dumps({"fitnessAge": {"fitnessAge": 33.0, "chronologicalAge": 41}}), encoding="utf-8"
+    )
+    gm.importa_cartella(conn, storico)
+    riga = conn.execute("SELECT * FROM wellness WHERE day = '2026-03-14'").fetchone()
+    assert riga["fitness_age"] == pytest.approx(33.0)

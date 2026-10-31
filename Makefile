@@ -4,12 +4,13 @@
 FIT ?= data/fit
 
 .PHONY: install serve sync sync-all sync-hevy sync-garmin session ingest report \
-        stats unmapped test clean
+        report-corsa stats unmapped test clean
 
 install:
 	uv sync
 
-# Dashboard su localhost, col pulsante che sincronizza davvero. Ctrl+C per uscire.
+# Le due dashboard su localhost (palestra su /, corsa su /corsa), col pulsante
+# che sincronizza davvero. Ctrl+C per uscire.
 serve:
 	uv run strength-tracker serve
 
@@ -31,8 +32,15 @@ session: ingest report
 ingest:
 	uv run strength-tracker ingest $(FIT)
 
+# Entrambe le pagine: palestra e corsa. Restano due file separati.
+# La corsa e' facoltativa: chi non ha ancora dati Garmin non deve vedere
+# fallire il make, quindi quella riga puo' uscire male senza fermare niente.
 report:
 	uv run strength-tracker report
+	-uv run strength-tracker report-corsa
+
+report-corsa:
+	uv run strength-tracker report-corsa
 
 stats:
 	uv run strength-tracker stats

@@ -41,6 +41,20 @@ HEADER_RICHIESTA = "X-Strength-Tracker"
 
 
 @dataclass
+class Pagina:
+    """Una pagina servita: il suo percorso, il suo file, il suo generatore.
+
+    Le dashboard restano due file statici indipendenti — il server e' solo un
+    modo in piu' di guardarli, non il posto dove vivono.
+    """
+
+    percorso: str
+    output_path: Path
+    rigenera: Callable[[sqlite3.Connection], Path]
+    fonti: tuple[Path, ...] = ()
+
+
+@dataclass
 class Opzioni:
     """Tutto quello che serve al server, iniettato per poterlo provare."""
 
@@ -57,6 +71,9 @@ class Opzioni:
     #: servirebbe una pagina vecchia dopo un aggiornamento del codice o una
     #: modifica alla mappatura, ed e' difficile accorgersene.
     fonti: tuple[Path, ...] = ()
+    #: Altre pagine servite dallo stesso processo (per esempio `/corsa`).
+    #: Una sincronizzazione le rigenera tutte: i dati sono gli stessi.
+    extra: tuple[Pagina, ...] = ()
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     @property
@@ -107,18 +124,23 @@ def _crea_gestore(opzioni: Opzioni) -> type[BaseHTTPRequestHandler]:
 
         # --- rotte ------------------------------------------------------
         def do_GET(self) -> None:  # noqa: N802
-            percorso = self.path.split("?", 1)[0]
+            percorso = self.path.split("?", 1)[0].rstrip("/") or "/"
             if percorso in ("/", "/index.html", "/dashboard.html"):
-                return self._manda_dashboard()
+                return self._manda_dashboard(
+                    Pagina("/", opzioni.output_path, opzioni.rigenera, opzioni.fonti)
+                )
+            for pagina in opzioni.extra:
+                if percorso == pagina.percorso.rstrip("/"):
+                    return self._manda_dashboard(pagina)
             self._json(404, {"errore": f"percorso sconosciuto: {percorso}"})
 
-        def _manda_dashboard(self) -> None:
-            file = Path(opzioni.output_path)
-            if va_rigenerata(file, opzioni.fonti):
+        def _manda_dashboard(self, pagina: Pagina) -> None:
+            file = Path(pagina.output_path)
+            if va_rigenerata(file, pagina.fonti):
                 with opzioni._lock:
                     conn = self._connessione()
                     try:
-                        file = opzioni.rigenera(conn)
+                        file = pagina.rigenera(conn)
                     finally:
                         conn.close()
             grezzo = file.read_bytes()
@@ -149,6 +171,8 @@ def _crea_gestore(opzioni: Opzioni) -> type[BaseHTTPRequestHandler]:
                     if errore:
                         return self._json(502, {"errore": errore, "righe": righe})
                     opzioni.rigenera(conn)
+                    for pagina in opzioni.extra:
+                        pagina.rigenera(conn)
                 finally:
                     conn.close()
             self._json(200, {"ok": True, "righe": righe})
@@ -192,8 +216,10 @@ def avvia(opzioni: Opzioni, apri_browser: bool = True) -> int:
             file=sys.stderr,
         )
         return 1
-    print(f"Dashboard su {opzioni.url}")
-    print("Il pulsante 'Sincronizza' scarica da Hevy e ricarica la pagina.")
+    print(f"Dashboard palestra su {opzioni.url}")
+    for pagina in opzioni.extra:
+        print(f"Dashboard corsa su    {opzioni.url.rstrip('/')}{pagina.percorso}")
+    print("Il pulsante 'Sincronizza' scarica da Hevy e da Garmin e ricarica la pagina.")
     print("Ctrl+C per fermare.")
     if apri_browser:  # pragma: no cover
         import webbrowser

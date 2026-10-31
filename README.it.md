@@ -12,8 +12,8 @@ carico di corsa. I dati arrivano da tre sorgenti:
 - la **Personal API di Garmin** — corse, bici, HRV, sonno, FC a riposo e peso:
   tutto cio' che un `.fit` di palestra non contiene.
 
-Un database solo, cosi' palestra e corsa stanno nella stessa riga settimana per
-settimana. Un esercizio mappato su piu' sorgenti mantiene **una storia sola**
+Un database solo e **due dashboard**: palestra e corsa stanno nella stessa
+riga settimana per settimana, ma ogni pagina risponde alle sue domande. Un esercizio mappato su piu' sorgenti mantiene **una storia sola**
 anche quando cambi strumento di tracciamento.
 
 Non e' un'app da bodybuilding: l'obiettivo e' capire se la palestra sta
@@ -39,6 +39,7 @@ Tutte e cinque sono complete: `ingest` + `report` è il flusso del dopo-allename
 | 5 | Dashboard HTML | ✅ fatto |
 | + | Import da Hevy (CSV, API, `sync-hevy`) e dashboard servita in locale | ✅ fatto |
 | + | Corsa e recupero dalla Personal API di Garmin, nello stesso database | ✅ fatto |
+| + | Fusione col progetto `garmin-dashboard`: due pagine, un repo, un database | ✅ fatto |
 
 ## Come si usa, dall'inizio
 
@@ -154,7 +155,7 @@ Garmin come JSON (`activities.json`, `daily.json`, `sleep.json`, `hrv.json`,
 `weight.json`), entrano da qui senza toccare la rete:
 
 ```bash
-uv run strength-tracker import-garmin ~/percorso/garmin-training-dashboard/data
+uv run strength-tracker import-garmin ~/garmin-dashboard/data
 ```
 
 Passa dagli stessi normalizzatori della sincronizzazione, quindi stessi campi e
@@ -207,7 +208,8 @@ segnala quali valori vengono dal file e quali da te.
 | --- | --- | --- |
 | I tuoi `.fit` | `data/fit/` | no, ignorato |
 | Database | `data/strength.db` | no, ignorato |
-| Dashboard | `output/dashboard.html` | no, ignorato |
+| Dashboard palestra | `output/dashboard.html` | no, ignorato |
+| Dashboard corsa | `output/corsa.html` | no, ignorato |
 | Mappatura esercizi | `config/exercise_mapping.yaml` | sì, versionata |
 | Chiavi API | ambiente o `~/.strength-tracker.env` | no, mai |
 | Token Garmin (cache 20h) | `data/garmin_token.json` | no, ignorato |
@@ -532,12 +534,54 @@ allenamento. In `examples/` c'è la seduta "Day 1 Upper Body" del 01/09/2026
 già trascritta. Finiscono tutte in `corrections`: i dati grezzi restano
 intatti e `data_source` dice da dove viene ogni valore.
 
-## La dashboard
+## Le due dashboard
+
+Un database, due pagine. Non è un compromesso: le domande sono diverse, e una
+pagina sola le avrebbe diluite entrambe.
+
+| Pagina | File | Cosa risponde |
+| --- | --- | --- |
+| Palestra | `output/dashboard.html` | sto diventando più forte? dove sto caricando? |
+| Corsa e recupero | `output/corsa.html` | quanto sto correndo? come sto recuperando? |
 
 ```bash
-strength-tracker report        # genera output/dashboard.html
+strength-tracker report         # genera output/dashboard.html
+strength-tracker report-corsa   # genera output/corsa.html
+make report                     # tutte e due
 make session FIT=~/Downloads/palestra   # ingest + report in un colpo
 ```
+
+Con `make serve` stanno nello stesso server, la palestra su `/` e la corsa su
+`/corsa`, con un collegamento dall'una all'altra in alto a destra. Il pulsante
+**Sincronizza** vale per entrambe: scarica da Hevy e da Garmin e rigenera tutte
+e due le pagine.
+
+### La dashboard della corsa
+
+Viene dal progetto `garmin-dashboard`, ed è la stessa pagina: SVG disegnati a
+mano, nessuna dipendenza, nemmeno Chart.js. A cambiare è da dove prende i
+numeri — il database condiviso invece dei suoi `data/*.json`. Due conseguenze:
+
+- Garmin si interroga **una volta sola**, non una per dashboard.
+- il gruppo "Palestra" non viene più dalle attività Garmin, che non espongono
+  le serie, ma dalle **sedute di forza vere**: stesse ore, contate da dove ci
+  sono anche carichi e ripetizioni.
+
+Mostra conto alla rovescia verso la gara, HRV notturna con la sua fascia
+normale, chilometri a settimana, ore per sport, carico acuto contro cronico,
+battito a riposo, sonno, record sulle varie distanze e ultime attività.
+
+La gara si configura in `config/corsa.yaml` (copia `config/corsa.example.yaml`):
+
+```yaml
+race_name: Mezza di Roma
+race_date: 2027-03-14
+plan_start: 2026-11-02     # il lunedì della prima settimana del piano
+```
+
+Senza quel file la pagina si genera lo stesso e dice che la gara manca, invece
+di inventarne una. Si può anche puntare il vecchio `settings.json`:
+`strength-tracker report-corsa --settings ~/garmin-dashboard/settings.json`.
 
 ### Due modi di aprirla
 
@@ -545,13 +589,16 @@ make session FIT=~/Downloads/palestra   # ingest + report in un colpo
 offline, ma è una fotografia: per aggiornarlo serve un comando, perché il
 browser non permette a un file locale di eseguirne.
 
-**`make serve`.** La stessa identica pagina servita da `http://127.0.0.1:8765`,
-dove il pulsante in alto **sincronizza davvero**: chiama il processo che hai
-avviato tu, che scarica da Hevy e rigenera. Server della libreria standard,
+**`make serve`.** Le stesse identiche pagine servite da
+`http://127.0.0.1:8765` (palestra) e `http://127.0.0.1:8765/corsa`, dove il
+pulsante in alto **sincronizza davvero**: chiama il processo che hai avviato
+tu, che scarica da Hevy e da Garmin e rigenera entrambe. Server della libreria standard,
 nessuna dipendenza in più, in ascolto solo su localhost. `POST /sync` richiede
 un header che una richiesta cross-origin non può aggiungere, e rifiuta le
 origini estranee: una pagina qualunque aperta nel browser non può farti partire
 una sincronizzazione.
+
+Il resto di questa sezione riguarda la dashboard della palestra.
 
 Un **unico file HTML** in `output/dashboard.html`: Chart.js è inserito inline
 dal repo e i dati sono un blocco JSON dentro la pagina. Zero richieste di rete,
@@ -617,6 +664,7 @@ strength-tracker unmapped --yaml        # le voci già pronte da incollare nel Y
 strength-tracker correct <set_id> --reps N --weight K [--exercise RAW_KEY] [--note "..."]
 strength-tracker correct --from-csv <file.csv>   # correzioni in blocco
 strength-tracker report                 # genera output/dashboard.html
+strength-tracker report-corsa           # genera output/corsa.html
 strength-tracker serve                  # dashboard su localhost, col pulsante Sincronizza
 strength-tracker stats                  # riepilogo testuale nel terminale
 ```
@@ -637,7 +685,9 @@ sovrascrivibili:
 | --- | --- | --- | --- |
 | Database | `data/strength.db` | `STRENGTH_TRACKER_DB` | `--db` |
 | Mappatura | `config/exercise_mapping.yaml` | `STRENGTH_TRACKER_MAPPING` | `--mapping` |
-| Dashboard | `output/dashboard.html` | `STRENGTH_TRACKER_OUTPUT` | `--output` |
+| Dashboard palestra | `output/dashboard.html` | `STRENGTH_TRACKER_OUTPUT` | `--output` |
+| Dashboard corsa | `output/corsa.html` | `STRENGTH_TRACKER_OUTPUT_CORSA` | `--output` |
+| Gara e piano | `config/corsa.yaml` | `STRENGTH_TRACKER_CORSA_CONFIG` | `--settings` |
 | Chiave API Hevy | — | `HEVY_API_KEY` | `--api-key` |
 | Chiave Personal API Garmin | — | `GARMIN_PERSONAL_API_KEY` | `--api-key` |
 | Token Garmin (cache 20h) | `data/garmin_token.json` | — | — |
@@ -648,9 +698,11 @@ sovrascrivibili:
 ```
 .
 ├── config/exercise_mapping.yaml   # mappatura versionata, editabile a mano
+├── config/corsa.example.yaml      # modello per gara e piano (copia in corsa.yaml)
 ├── src/strength_tracker/          # fit_parser, hevy, garmin, db, ingest, mapping,
 │                                  # metrics, dashboard, server, cli
-├── templates/dashboard.html.j2
+├── templates/dashboard.html.j2    # palestra (Jinja + Chart.js)
+├── templates/corsa.html           # corsa (SVG a mano, nessuna dipendenza)
 ├── vendor/chart.min.js            # Chart.js 4.4.4 UMD, MIT — inlineato nella dashboard
 └── tests/
     ├── fitgen.py                  # encoder FIT minimale: genera le fixture binarie
@@ -682,6 +734,10 @@ uv run python tests/fitgen.py
   sono confrontabili e interrogabili con una join su `(iso_year, iso_week)`,
   ma ogni dashboard resta quella che era. La corsa e' entrata con una
   migrazione additiva, senza riscrivere un dato.
+- **Due pagine, due tecnologie, nessun framework**: la palestra usa Jinja e
+  Chart.js vendorizzato, la corsa disegna i suoi SVG a mano e non ha nemmeno
+  quello. Uniformarle avrebbe voluto dire riscrivere codice che funziona, per
+  guadagnarci niente: sono due file statici, non due applicazioni.
 - **La rete solo su richiesta**: l'unico modulo che la tocca e' quello delle
   sincronizzazioni. Le chiavi API si leggono da variabile d'ambiente o da un
   file fuori dal repository, non vengono mai stampate, e il token Garmin

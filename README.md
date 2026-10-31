@@ -13,7 +13,8 @@ running load. Data comes from three sources:
 - the **Garmin Personal API** — runs, rides, HRV, sleep, resting HR and body
   weight: everything a gym `.fit` file doesn't contain.
 
-One database, so gym and running sit in the same row week by week. An exercise
+One database and **two dashboards**: gym and running sit in the same row week
+by week, but each page answers its own questions. An exercise
 mapped on several sources keeps **a single history** even when you switch
 tracking tools.
 
@@ -44,6 +45,7 @@ are complete: `ingest` + `report` is the post-workout flow.
 | 5 | HTML dashboard | ✅ done |
 | + | Hevy import (CSV, API, `sync-hevy`) and the dashboard served locally | ✅ done |
 | + | Running and recovery from the Garmin Personal API, same database | ✅ done |
+| + | Merged with the `garmin-dashboard` project: two pages, one repo, one database | ✅ done |
 
 ## Getting started
 
@@ -161,7 +163,7 @@ the Garmin data as JSON (`activities.json`, `daily.json`, `sleep.json`,
 network:
 
 ```bash
-uv run strength-tracker import-garmin ~/path/garmin-training-dashboard/data
+uv run strength-tracker import-garmin ~/garmin-dashboard/data
 ```
 
 It goes through the same normalisers as the sync, so same fields and same
@@ -214,7 +216,8 @@ marks which values came from the file and which from you.
 | --- | --- | --- |
 | Your `.fit` files | `data/fit/` | no, ignored |
 | Database | `data/strength.db` | no, ignored |
-| Dashboard | `output/dashboard.html` | no, ignored |
+| Gym dashboard | `output/dashboard.html` | no, ignored |
+| Running dashboard | `output/corsa.html` | no, ignored |
 | Exercise mapping | `config/exercise_mapping.yaml` | yes, versioned |
 | API keys | environment or `~/.strength-tracker.env` | no, never |
 | Garmin token (20h cache) | `data/garmin_token.json` | no, ignored |
@@ -535,12 +538,56 @@ day. `examples/` contains the "Day 1 Upper Body" session of 01/09/2026 already
 transcribed. They all land in `corrections`: raw data stays intact and
 `data_source` says where each value came from.
 
-## The dashboard
+## The two dashboards
+
+One database, two pages. Not a compromise: the questions differ, and a single
+page would have diluted both.
+
+| Page | File | What it answers |
+| --- | --- | --- |
+| Gym | `output/dashboard.html` | am I getting stronger? where am I loading? |
+| Running and recovery | `output/corsa.html` | how much am I running? how am I recovering? |
 
 ```bash
 strength-tracker report                  # writes output/dashboard.html
+strength-tracker report-corsa            # writes output/corsa.html
+make report                              # both
 make session FIT=~/Downloads/palestra    # ingest + report in one go
 ```
+
+With `make serve` they live in the same server, the gym on `/` and running on
+`/corsa`, with a link from one to the other in the top right. The
+**Sincronizza** button covers both: it fetches from Hevy and Garmin and
+regenerates both pages.
+
+### The running dashboard
+
+It comes from the `garmin-dashboard` project, and it is the same page:
+hand-drawn SVG, no dependencies, not even Chart.js. What changed is where the
+numbers come from — the shared database instead of its own `data/*.json`. Two
+consequences:
+
+- Garmin is queried **once**, not once per dashboard.
+- the "Palestra" group no longer comes from Garmin activities, which do not
+  expose the sets, but from the **real strength sessions**: same hours,
+  counted from where the loads and reps are.
+
+It shows the countdown to the race, overnight HRV with its normal band,
+kilometres per week, hours per sport, acute against chronic load, resting HR,
+sleep, records over the usual distances and recent activities.
+
+The race is configured in `config/corsa.yaml` (copy
+`config/corsa.example.yaml`):
+
+```yaml
+race_name: Rome Half
+race_date: 2027-03-14
+plan_start: 2026-11-02     # the Monday of the plan's first week
+```
+
+Without that file the page still builds and says the race is missing, rather
+than inventing one. You can also point at the old `settings.json`:
+`strength-tracker report-corsa --settings ~/garmin-dashboard/settings.json`.
 
 ### Two ways to open it
 
@@ -548,9 +595,10 @@ make session FIT=~/Downloads/palestra    # ingest + report in one go
 offline, but it's a snapshot: updating it takes a command, because the browser
 won't let a local file run one.
 
-**`make serve`.** The very same page served from `http://127.0.0.1:8765`, where
-the top button **actually syncs**: it calls the process you started, which
-fetches from Hevy and regenerates. Standard-library server, no extra
+**`make serve`.** The very same pages served from `http://127.0.0.1:8765`
+(gym) and `http://127.0.0.1:8765/corsa` (running), where the top button
+**actually syncs**: it calls the process you started, which fetches from Hevy
+and Garmin and regenerates both. Standard-library server, no extra
 dependencies, listening on localhost only. `POST /sync` requires a header a
 cross-origin request can't add, and rejects foreign origins: a random page open
 in your browser can't trigger a sync.
@@ -618,6 +666,7 @@ strength-tracker unmapped --yaml        # entries ready to paste into the YAML
 strength-tracker correct <set_id> --reps N --weight K [--exercise RAW_KEY] [--note "..."]
 strength-tracker correct --from-csv <file.csv>   # bulk corrections
 strength-tracker report                 # writes output/dashboard.html
+strength-tracker report-corsa           # writes output/corsa.html
 strength-tracker serve                  # dashboard on localhost, with a working button
 strength-tracker stats                  # quick textual summary in the terminal
 ```
@@ -637,7 +686,9 @@ overridable:
 | --- | --- | --- | --- |
 | Database | `data/strength.db` | `STRENGTH_TRACKER_DB` | `--db` |
 | Mapping | `config/exercise_mapping.yaml` | `STRENGTH_TRACKER_MAPPING` | `--mapping` |
-| Dashboard | `output/dashboard.html` | `STRENGTH_TRACKER_OUTPUT` | `--output` |
+| Gym dashboard | `output/dashboard.html` | `STRENGTH_TRACKER_OUTPUT` | `--output` |
+| Running dashboard | `output/corsa.html` | `STRENGTH_TRACKER_OUTPUT_CORSA` | `--output` |
+| Race and plan | `config/corsa.yaml` | `STRENGTH_TRACKER_CORSA_CONFIG` | `--settings` |
 | Hevy API key | — | `HEVY_API_KEY` | `--api-key` |
 | Garmin Personal API key | — | `GARMIN_PERSONAL_API_KEY` | `--api-key` |
 | Garmin token (20h cache) | `data/garmin_token.json` | — | — |
@@ -648,9 +699,11 @@ overridable:
 ```
 .
 ├── config/exercise_mapping.yaml   # versioned mapping, hand-editable
+├── config/corsa.example.yaml      # template for race and plan (copy to corsa.yaml)
 ├── src/strength_tracker/          # fit_parser, hevy, garmin, db, ingest, mapping,
 │                                  # metrics, dashboard, server, cli
-├── templates/dashboard.html.j2
+├── templates/dashboard.html.j2    # gym (Jinja + Chart.js)
+├── templates/corsa.html           # running (hand-drawn SVG, no dependencies)
 ├── vendor/chart.min.js            # Chart.js 4.4.4 UMD, MIT — inlined into the dashboard
 └── tests/
     ├── fitgen.py                  # minimal FIT encoder: generates the binary fixtures
@@ -681,6 +734,10 @@ uv run python tests/fitgen.py
   comparable and queryable with a join on `(iso_year, iso_week)`, while each
   dashboard stays what it was. Running arrived through an additive migration,
   without rewriting any data.
+- **Two pages, two technologies, no framework**: the gym page uses Jinja and
+  vendored Chart.js, the running page draws its own SVG and doesn't even need
+  that. Unifying them would have meant rewriting working code for no gain:
+  they are two static files, not two applications.
 - **Network only on request**: the only modules that touch it are the sync
   ones. API keys are read from the environment or a file outside the
   repository, are never printed, and the Garmin token (valid 24 hours) is

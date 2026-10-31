@@ -32,8 +32,18 @@ def default_mapping_path() -> Path:
 
 
 def default_output_path() -> Path:
-    """Dashboard HTML generata."""
+    """Dashboard HTML della palestra."""
     return _env_path("STRENGTH_TRACKER_OUTPUT", "output/dashboard.html")
+
+
+def default_corsa_output_path() -> Path:
+    """Dashboard HTML della corsa: pagina separata, stesso database."""
+    return _env_path("STRENGTH_TRACKER_OUTPUT_CORSA", "output/corsa.html")
+
+
+def default_corsa_config_path() -> Path:
+    """Gara e inizio del piano, per la dashboard della corsa."""
+    return _env_path("STRENGTH_TRACKER_CORSA_CONFIG", "config/corsa.yaml")
 
 
 __all__ = [
@@ -43,4 +53,6 @@ __all__ = [
     "default_db_path",
     "default_mapping_path",
     "default_output_path",
+    "default_corsa_output_path",
+    "default_corsa_config_path",
 ]

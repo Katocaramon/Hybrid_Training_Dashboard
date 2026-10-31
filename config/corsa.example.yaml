@@ -1,0 +1,14 @@
+# Gara e piano, per la dashboard della corsa (output/corsa.html).
+#
+# Copia questo file in `config/corsa.yaml` e mettici i tuoi dati. Senza, la
+# pagina si genera lo stesso: mostra tutto il resto e dice che la gara manca,
+# invece di inventarne una.
+#
+#   strength-tracker report-corsa
+#
+# Si puo' anche puntare direttamente il vecchio `settings.json`:
+#   strength-tracker report-corsa --settings ~/garmin-dashboard/settings.json
+
+race_name: La mia gara
+race_date: 2027-03-14     # AAAA-MM-GG
+plan_start: 2026-11-02    # il lunedi' della prima settimana del piano

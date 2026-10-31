@@ -1,7 +1,7 @@
 #!/bin/bash
 # Doppio click da Finder: scarica le sedute nuove da Hevy (e, se c'e' la
-# chiave, corse e recupero da Garmin), rigenera la dashboard e la apre. Serve
-# per non dover aprire il Terminale a mano.
+# chiave, corse e recupero da Garmin), rigenera le due dashboard e le apre.
+# Serve per non dover aprire il Terminale a mano.
 #
 # Le chiavi API si cercano, in ordine:
 #   1. nelle variabili d'ambiente HEVY_API_KEY e GARMIN_PERSONAL_API_KEY
@@ -50,12 +50,15 @@ if [ -n "$GARMIN_PERSONAL_API_KEY" ]; then
 fi
 
 echo
-echo "Rigenero la dashboard..."
+echo "Rigenero le dashboard..."
 if ! uv run strength-tracker report; then
     pausa; exit 1
 fi
+# La corsa e' facoltativa: senza dati Garmin non deve far fallire tutto.
+uv run strength-tracker report-corsa || true
 
 open output/dashboard.html
+[ -f output/corsa.html ] && open output/corsa.html
 echo
-echo "Fatto. La dashboard e' aperta nel browser."
+echo "Fatto. Le dashboard sono aperte nel browser."
 sleep 2

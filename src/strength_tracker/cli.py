@@ -17,6 +17,8 @@ from pathlib import Path
 
 from . import (
     __version__,
+    default_corsa_config_path,
+    default_corsa_output_path,
     default_db_path,
     default_mapping_path,
     default_output_path,
@@ -282,6 +284,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
         chiave_garmin = ""  # senza chiave Garmin il pulsante fa solo la palestra
     percorso_mappatura = args.mapping or default_mapping_path()
     uscita = args.output or default_output_path()
+    uscita_corsa = default_corsa_output_path()
+    config_corsa = _config_corsa(args)
     percorso_token = (args.db or default_db_path()).parent / "garmin_token.json"
 
     def sincronizza(conn) -> tuple[list[str], str | None]:
@@ -317,6 +321,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
         db.refresh_exercise_map(conn, load_mapping(percorso_mappatura).as_rows())
         return dashboard.genera(conn, load_mapping(percorso_mappatura), uscita)
 
+    def rigenera_corsa(conn):
+        from . import corsa
+
+        return corsa.genera(conn, uscita_corsa, config_corsa)
+
     if args.host not in ("127.0.0.1", "localhost", "::1"):
         print(
             f"[strength-tracker] attenzione: in ascolto su {args.host}, quindi "
@@ -335,6 +344,14 @@ def cmd_serve(args: argparse.Namespace) -> int:
         # Se il database o il template sono piu' recenti della pagina gia'
         # generata, la pagina viene rifatta prima di servirla.
         fonti=(percorso_db, dashboard._cerca_asset("templates") / "dashboard.html.j2"),
+        extra=(
+            server.Pagina(
+                percorso="/corsa",
+                output_path=uscita_corsa,
+                rigenera=rigenera_corsa,
+                fonti=(percorso_db, dashboard._cerca_asset("templates") / "corsa.html"),
+            ),
+        ),
     )
     return server.avvia(opzioni, apri_browser=not args.no_open)
 
@@ -355,6 +372,44 @@ def cmd_report(args: argparse.Namespace) -> int:
     if not vuoto:
         print(
             "[strength-tracker] il database e' vuoto: la dashboard non ha dati da mostrare.",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+def _config_corsa(args: argparse.Namespace):
+    """Gara e piano, se configurati. Un file storto ferma subito il comando."""
+    from .corsa import carica_config
+
+    percorso = getattr(args, "settings", None) or default_corsa_config_path()
+    try:
+        return carica_config(percorso)
+    except (ValueError, OSError) as exc:
+        print(f"[strength-tracker] configurazione corsa non valida: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+
+
+def cmd_report_corsa(args: argparse.Namespace) -> int:
+    """Genera la dashboard della corsa: pagina separata, stesso database."""
+    from . import corsa
+
+    conn = _open_db(args)
+    config = _config_corsa(args)
+    destinazione = args.output or default_corsa_output_path()
+    percorso = corsa.genera(conn, destinazione, config)
+    print(f"Dashboard corsa generata: {percorso}  ({percorso.stat().st_size / 1024:.0f} KB)")
+    if config is None:
+        print(
+            "[strength-tracker] nessuna gara impostata: scrivi race_name, race_date e "
+            f"plan_start in {default_corsa_config_path()} per il conto alla rovescia.",
+            file=sys.stderr,
+        )
+    vuoto = conn.execute("SELECT COUNT(*) FROM endurance_details").fetchone()[0]
+    if not vuoto:
+        print(
+            "[strength-tracker] nessuna attivita' di resistenza nel database: "
+            "lancia `strength-tracker sync-garmin`.",
             file=sys.stderr,
         )
         return 1
@@ -835,6 +890,25 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"mappatura esercizi (default: {default_mapping_path()})",
     )
     p_report.set_defaults(func=cmd_report)
+
+    p_report_corsa = sub.add_parser(
+        "report-corsa", help="genera la dashboard della corsa (output/corsa.html)"
+    )
+    p_report_corsa.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=f"dove scrivere la pagina (default: {default_corsa_output_path()})",
+    )
+    p_report_corsa.add_argument(
+        "--settings",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=f"gara e piano (default: {default_corsa_config_path()}; accetta anche un .json)",
+    )
+    p_report_corsa.set_defaults(func=cmd_report_corsa)
 
     p_serve = sub.add_parser(
         "serve",

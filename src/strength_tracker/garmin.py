@@ -345,6 +345,16 @@ class GarminClient:
                 raise GarminError(f"risposta non JSON da {percorso.split('?')[0]}") from exc
         raise GarminError(f"nessuna risposta utile da {percorso.split('?')[0]}")
 
+    def profilo(self, giorno: date) -> dict[str, Any] | None:
+        """Eta' fitness del giorno. None se Garmin non la espone per quella data."""
+        try:
+            dati = self.get(f"/fitnessage-service/fitnessage/v2/{giorno.isoformat()}")
+        except GarminError as exc:
+            if exc.status in (400, 404, 500):
+                return None
+            raise
+        return dati if isinstance(dati, dict) else None
+
     # -- attivita' --------------------------------------------------------
 
     def pagina_attivita(self, offset: int, limite: int) -> list[dict[str, Any]]:
@@ -645,6 +655,16 @@ def _normalizza_peso(giorno: dict[str, Any]) -> dict[str, Any]:
     return {"body_weight_kg": None if grammi is None else round(grammi / 1000.0, 2)}
 
 
+def _normalizza_profilo(profilo: dict[str, Any]) -> dict[str, Any]:
+    """Eta' fitness e VO2max del giorno. Campi assenti -> NULL, come sempre."""
+    eta = profilo.get("fitnessAge") if isinstance(profilo.get("fitnessAge"), dict) else profilo
+    return {
+        "fitness_age": _numero(eta.get("fitnessAge")),
+        "chronological_age": _intero(eta.get("chronologicalAge")),
+        "vo2max": _numero(eta.get("vo2MaxRunning") or eta.get("vo2MaxValue")),
+    }
+
+
 @dataclass(frozen=True)
 class Dataset:
     """Una serie di dati quotidiani, con la sua finestra e il suo estrattore."""
@@ -870,6 +890,17 @@ def sync_garmin(
             corrente = termine + timedelta(days=1)
             ampiezza = dataset.giorni_finestra
 
+    # L'eta' fitness si chiede per un giorno solo: e' l'ultimo che abbiamo.
+    log("[profilo] eta' fitness")
+    profilo = client.profilo(fine)
+    if profilo:
+        valori = _normalizza_profilo(profilo)
+        if any(v is not None for v in valori.values()) and not dry_run:
+            if db.store_wellness_day(conn, fine.isoformat(), valori, raw={"profile": profilo}):
+                rapporto.giorni_nuovi += 1
+            else:
+                rapporto.giorni_aggiornati += 1
+
     if not dry_run:
         db.sync_state_set(conn, _STATO_BENESSERE, fine.isoformat())
         db.sync_state_set(conn, _STATO_ATTIVITA, inizio.isoformat())
@@ -954,6 +985,15 @@ def importa_cartella(
                 attivita.session_uid
             )
 
+    # `profile.json` dell'altro progetto: un'istantanea, senza data propria.
+    # La si attribuisce all'ultimo giorno noto, che e' quello in cui l'ha letta.
+    profilo_file = cartella / "profile.json"
+    profilo: dict[str, Any] | None = None
+    if profilo_file.exists():
+        contenuto = json.loads(profilo_file.read_text(encoding="utf-8"))
+        if isinstance(contenuto, dict):
+            profilo = contenuto
+
     giorni: list[str] = []
     for nome, dataset in FILE_DATASET.items():
         percorso = cartella / nome
@@ -978,6 +1018,11 @@ def importa_cartella(
                 rapporto.giorni_nuovi += 1
             else:
                 rapporto.giorni_aggiornati += 1
+
+    if giorni and profilo:
+        valori = _normalizza_profilo(profilo)
+        if any(v is not None for v in valori.values()) and not dry_run:
+            db.store_wellness_day(conn, max(giorni), valori, raw={"profile": profilo})
 
     if giorni:
         rapporto.dal, rapporto.al = min(giorni), max(giorni)
