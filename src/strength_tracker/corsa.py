@@ -48,6 +48,12 @@ RECORD = (
 )
 
 
+#: Nome della gara nel file di esempio. Un `cp` senza modifiche e' un errore
+#: facile e silenzioso — la pagina mostrerebbe una gara finta con l'aria di
+#: essere vera — quindi viene riconosciuto e fermato.
+NOME_ESEMPIO = "La mia gara"
+
+
 class ConfigCorsa(dict):
     """Gara e inizio del piano. Assente = la pagina non mostra il conto alla rovescia."""
 
@@ -76,6 +82,12 @@ def carica_config(percorso: Path | None) -> ConfigCorsa | None:
     mancanti = [k for k in ("race_name", "race_date", "plan_start") if not dati.get(k)]
     if mancanti:
         raise ValueError(f"{percorso}: manca {', '.join(mancanti)}")
+    if str(dati["race_name"]).strip().lower() == NOME_ESEMPIO.lower():
+        raise ValueError(
+            f"{percorso} contiene ancora i valori del modello "
+            f"(race_name: {NOME_ESEMPIO}). Scrivici la tua gara: nome, data e "
+            "il lunedi' della prima settimana del piano."
+        )
     for chiave in ("race_date", "plan_start"):
         date.fromisoformat(str(dati[chiave]))  # fallisce subito se la data e' storta
     return ConfigCorsa(

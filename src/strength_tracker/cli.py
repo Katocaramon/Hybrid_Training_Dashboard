@@ -399,6 +399,10 @@ def cmd_report_corsa(args: argparse.Namespace) -> int:
     destinazione = args.output or default_corsa_output_path()
     percorso = corsa.genera(conn, destinazione, config)
     print(f"Dashboard corsa generata: {percorso}  ({percorso.stat().st_size / 1024:.0f} KB)")
+    if config is not None:
+        # Scriverlo evita il dubbio piu' comune: "ma quale gara sta leggendo?"
+        print(f"  Gara: {config['name']} - {_data_it(config['date'])}")
+        print(f"  Piano dal {_data_it(config['planStart'])}")
     if config is None:
         print(
             "[strength-tracker] nessuna gara impostata: scrivi race_name, race_date e "

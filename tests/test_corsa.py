@@ -7,6 +7,7 @@ doppio click senza chiedere niente alla rete.
 """
 
 import json
+import pathlib
 from datetime import date, timedelta
 
 import pytest
@@ -416,3 +417,38 @@ def test_il_server_espone_le_due_pagine(conn, tmp_path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_il_modello_copiato_e_non_modificato_viene_fermato(tmp_path):
+    """Un `cp` dell'esempio senza modifiche mostrerebbe una gara finta credibile."""
+    f = tmp_path / "corsa.yaml"
+    f.write_text(
+        pathlib.Path("config/corsa.example.yaml").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="modello"):
+        corsa.carica_config(f)
+
+
+def test_cli_dice_quale_gara_sta_usando(conn, tmp_path, capsys):
+    from strength_tracker.cli import main
+
+    conn.commit()
+    config = tmp_path / "corsa.yaml"
+    config.write_text(
+        "race_name: Mezza Maratona Roma-Ostia\nrace_date: 2027-02-28\nplan_start: 2026-10-26\n",
+        encoding="utf-8",
+    )
+    main(
+        [
+            "--db",
+            conn.execute("PRAGMA database_list").fetchone()[2],
+            "report-corsa",
+            "--output",
+            str(tmp_path / "corsa.html"),
+            "--settings",
+            str(config),
+        ]
+    )
+    uscita = capsys.readouterr().out
+    assert "Mezza Maratona Roma-Ostia" in uscita
+    assert "28/02/2027" in uscita

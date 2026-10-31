@@ -9,6 +9,8 @@
 # Si puo' anche puntare direttamente il vecchio `settings.json`:
 #   strength-tracker report-corsa --settings ~/garmin-dashboard/settings.json
 
+# I valori qui sotto sono un modello: vanno sostituiti. Se li lasci com'e',
+# `report-corsa` si ferma e te lo dice, invece di mostrare una gara finta.
 race_name: La mia gara
 race_date: 2027-03-14     # AAAA-MM-GG
 plan_start: 2026-11-02    # il lunedi' della prima settimana del piano
